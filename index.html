@@ -1,0 +1,1785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YTPMV MAKER</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Mono:wght@400;700&display=swap');
+
+  :root{
+    --bg: #0b0b12;
+    --panel: #16141f;
+    --panel-line: #2a2740;
+    --magenta: #ff2ea6;
+    --cyan: #29f1ff;
+    --acid: #d4ff2a;
+    --text: #e9e6f5;
+    --muted: #8b87a3;
+  }
+  *{ box-sizing: border-box; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--text); font-family:'Space Mono', monospace; min-height:100%; }
+  body{ background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 3px); }
+  .wrap{ max-width: 1040px; margin: 0 auto; padding: 28px 18px 60px; }
+
+  header{ margin-bottom: 24px; }
+  h1{
+    font-family:'Press Start 2P', monospace; font-size: clamp(20px, 4vw, 34px); line-height: 1.4;
+    margin: 0 0 8px; color: var(--acid); text-shadow: 2px 0 var(--magenta), -2px 0 var(--cyan); letter-spacing: 1px;
+  }
+  .sub{ color: var(--muted); font-size: 13px; max-width: 66ch; }
+
+  .grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom:16px; }
+  @media (max-width: 720px){ .grid{ grid-template-columns: 1fr; } }
+
+  .panel{ background: var(--panel); border: 1px solid var(--panel-line); border-radius: 4px; padding: 16px; margin-bottom:16px; }
+  .panel h2{ font-size: 12px; text-transform: uppercase; letter-spacing: 2px; color: var(--cyan); margin: 0 0 12px; font-weight:700; }
+
+  .drop{ border: 2px dashed var(--panel-line); border-radius: 4px; padding: 22px 14px; text-align:center; cursor:pointer; transition: border-color .15s, background .15s; position: relative; }
+  .drop:hover, .drop.drag{ border-color: var(--magenta); background: rgba(255,46,166,0.06); }
+  .drop input{ position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%; }
+  .drop .big{ font-size: 13px; color: var(--text); }
+  .drop .small{ font-size: 11px; color: var(--muted); margin-top:6px; }
+
+  .stat-line{ font-size: 12px; color: var(--muted); margin-top: 10px; min-height: 16px; line-height:1.5; }
+  .stat-line b{ color: var(--acid); font-weight:700; }
+  .stat-line.err{ color: var(--magenta); }
+
+  select, button, input[type=file]{ font-family:'Space Mono', monospace; }
+  select{ background: #100e18; color: var(--text); border: 1px solid var(--panel-line); border-radius: 3px; padding: 8px 10px; font-size: 13px; width:100%; }
+
+  label.field{ display:block; font-size: 11px; color: var(--muted); margin: 12px 0 6px; text-transform:uppercase; letter-spacing:1px; }
+
+  .controls{ display:flex; flex-wrap:wrap; gap: 10px; margin-top: 16px; }
+  button.action{ cursor:pointer; font-weight:700; padding: 12px 18px; text-transform:uppercase; letter-spacing: 1px; font-size: 12px; border: none; border-radius: 3px; transition: transform .1s, box-shadow .1s; }
+  button.action:disabled{ opacity:0.35; cursor:not-allowed; }
+  button.action:not(:disabled):hover{ transform: translateY(-1px); }
+  .btn-preview{ background: var(--cyan); color:#04121a; }
+  .btn-preview:not(:disabled):hover{ box-shadow: 0 0 0 2px var(--cyan); }
+  .btn-record{ background: var(--magenta); color:#1a0410; }
+  .btn-record:not(:disabled):hover{ box-shadow: 0 0 0 2px var(--magenta); }
+  .btn-stop{ background: #2a2740; color: var(--text); }
+
+  .stage{ margin-top: 4px; background: #000; border: 1px solid var(--panel-line); border-radius: 4px; padding: 10px; position:relative; }
+  canvas{ width:100%; height:auto; display:block; border-radius:2px; background:#000; }
+
+  .tracker{ margin-top: 10px; height: 26px; background:#100e18; border:1px solid var(--panel-line); border-radius: 3px; position:relative; overflow:hidden; }
+  .tracker .notebar{ position:absolute; bottom:0; width:2px; background: var(--acid); opacity:0.55; }
+  .tracker .playhead{ position:absolute; top:0; bottom:0; width:2px; background: var(--magenta); box-shadow: 0 0 8px var(--magenta); left:0; }
+
+  a.download-link{ display:inline-block; margin-top: 14px; color: var(--acid); font-weight:700; text-decoration: underline; font-size: 13px; }
+  a.download-link.hidden{ display:none; }
+
+  .track-row{ border: 1px solid var(--panel-line); border-radius: 4px; padding: 12px; margin-bottom: 10px; background: #100e18; }
+  .track-row.track-disabled{ opacity: 0.45; }
+  .track-enable-checkbox{ width:auto; margin-right:8px; flex-shrink:0; }
+  .track-head{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  .track-name{ font-weight:700; color: var(--text); font-size:13px; }
+  .track-meta{ font-size: 11px; color: var(--muted); }
+  canvas.miniroll{ width:100%; height:46px; margin: 8px 0; border-radius:2px; background:#0d0b16; }
+  .track-controls{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  button.mini-btn{ background:#1c1a2b; color: var(--cyan); border:1px solid var(--panel-line); border-radius:3px; padding:7px 10px; font-size:11px; cursor:pointer; }
+  button.mini-btn:hover{ border-color: var(--cyan); }
+  label.mini-drop{ position:relative; background:#1c1a2b; border:1px dashed var(--panel-line); border-radius:3px; padding:7px 10px; font-size:11px; cursor:pointer; color: var(--muted); }
+  label.mini-drop:hover{ border-color: var(--magenta); color: var(--text); }
+  label.mini-drop input{ position:absolute; inset:0; opacity:0; cursor:pointer; }
+  select.mini-base{ width:auto; max-width:150px; font-size:11px; padding:6px 8px; display:none; }
+  .track-status{ font-size: 11px; color: var(--muted); margin-top: 8px; line-height:1.5; }
+  .track-status.err{ color: var(--magenta); }
+
+  .trim-wrap{ margin-top: 10px; }
+  canvas.waveform{ width:100%; height:60px; display:block; border-radius:2px; cursor: pointer; border: 1px solid var(--panel-line); }
+  .trim-row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:6px; }
+  .trim-readout{ font-size:11px; color: var(--muted); }
+  .track-name-wrap{ display:flex; align-items:center; gap:8px; }
+  .main-badge{ font-size:10px; color: var(--bg); background: var(--acid); padding:2px 6px; border-radius:2px; font-weight:700; letter-spacing:0.5px; }
+
+  footer{ margin-top: 28px; color: var(--muted); font-size: 11px; line-height:1.6; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>YTPMV MAKER</h1>
+    <div class="sub">Drop a MIDI file and a clip. Every note re-pitches a clip and drives the picture — give every instrument its own clip, or leave it as one clip for the lot.</div>
+  </header>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>01 — MIDI file</h2>
+      <div class="drop" id="midiDrop">
+        <input type="file" id="midiInput" accept=".mid,.midi" />
+        <div class="big">Drop or choose a .mid file</div>
+        <div class="small">Defines the notes, timing and picture cuts</div>
+      </div>
+      <div class="stat-line" id="midiStats">No MIDI loaded yet.</div>
+    </div>
+
+    <div class="panel">
+      <h2>02 — Default clip</h2>
+      <div class="drop" id="clipDrop">
+        <input type="file" id="clipInput" accept="video/*,audio/*" />
+        <div class="big">Drop or choose a video/audio clip</div>
+        <div class="small">Used by any track that doesn't get its own clip below</div>
+      </div>
+      <div class="stat-line" id="clipStats">No clip loaded yet.</div>
+      <div id="clipTrim"></div>
+      <label class="field" for="baseNote">Base note (auto-detected, override if it's wrong)</label>
+      <select id="baseNote"></select>
+    </div>
+  </div>
+
+  <div class="panel" id="trackPanel" style="display:none;">
+    <h2>03 — Instrument tracks</h2>
+    <div class="stat-line" style="margin-top:0;margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+      <span>Give a track its own clip, or leave it — it'll just use the default clip above. Untick a track to leave it out of Preview/Record entirely.</span>
+      <span style="display:flex; gap:8px; flex-shrink:0;">
+        <button class="mini-btn" id="selectAllTracks">select all</button>
+        <button class="mini-btn" id="selectNoneTracks">select none</button>
+      </span>
+    </div>
+    <div id="trackList"></div>
+  </div>
+
+  <div class="panel">
+    <h2>04 — Make it</h2>
+    <label class="field" style="margin-top:0; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+      <input type="checkbox" id="anticipateToggle" style="width:auto;">
+      Let a bit of the trimmed-off head play just before each note (skipped automatically if notes are too close together)
+    </label>
+    <div id="anticipateAmountRow" style="display:none; margin-top:8px;">
+      <label style="font-size:11px; color:var(--muted);">Max lead-in: <input type="number" id="anticipateMs" value="80" min="0" max="500" step="10" style="width:64px; background:#100e18; color:var(--text); border:1px solid var(--panel-line); border-radius:3px; padding:4px 6px;"> ms</label>
+    </div>
+    <label class="field" style="margin-top:12px; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+      <input type="checkbox" id="showLabelsToggle" checked style="width:auto;">
+      Show instrument names on the canvas (preview &amp; recorded video)
+    </label>
+    <label class="field" style="margin-top:8px; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+      <input type="checkbox" id="reduceStrobeToggle" checked style="width:auto;">
+      Reduce strobing (hold the last frame instead of flashing black on fast note runs)
+    </label>
+    <label class="field" style="margin-top:8px; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+      <input type="checkbox" id="scanlineToggle" checked style="width:auto;">
+      Show scanline overlay on the canvas
+    </label>
+    <label class="field" style="margin-top:8px; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+      Output resolution:
+      <select id="resolutionSelect" style="width:auto;">
+        <option value="960x540" selected>540p (fast, default)</option>
+        <option value="1280x720">720p</option>
+        <option value="1920x1080">1080p</option>
+        <option value="3840x2160">4K</option>
+        <option value="7680x4320">8K — fine for Proper export below, likely to stutter for quick Record</option>
+      </select>
+    </label>
+    <div class="controls">
+      <button class="action btn-preview" id="btnPreview" disabled>▶ Preview</button>
+      <button class="action btn-record" id="btnRecord" disabled>● Record &amp; download</button>
+      <button class="action btn-stop" id="btnStop" disabled>■ Stop</button>
+    </div>
+    <div class="stat-line" id="genStatus"></div>
+    <a href="#" class="download-link hidden" id="downloadLink" download="ytpmv.webm">Download your YTPMV (.webm)</a>
+
+    <div class="panel" style="margin-top:16px; background:#0e0c17;">
+      <h2>Proper export (frame-accurate, not real-time)</h2>
+      <div class="stat-line" style="margin-top:0;">
+        Steps through the song frame by frame instead of recording live, so it doesn't drop frames or stutter regardless of your computer's speed — it just takes longer to run. Uses your current resolution setting above. Needs Chrome, Edge, or Firefox 130+ (WebCodecs support).
+      </div>
+      <label class="field" style="margin-top:10px; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+        Frame rate:
+        <select id="exportFpsSelect" style="width:auto;">
+          <option value="24">24 fps</option>
+          <option value="30" selected>30 fps</option>
+          <option value="60">60 fps</option>
+        </select>
+      </label>
+      <div class="controls">
+        <button class="action btn-preview" id="btnProperExport" disabled>⚙ Export properly</button>
+        <button class="action btn-stop" id="btnCancelExport" disabled>■ Cancel export</button>
+      </div>
+      <div class="stat-line" id="exportProgress"></div>
+      <a href="#" class="download-link hidden" id="properDownloadLink" download="ytpmv-proper.webm">Download your properly-exported YTPMV (.webm)</a>
+    </div>
+
+    <div class="stage">
+      <canvas id="canvas" width="960" height="540"></canvas>
+      <div class="tracker" id="tracker">
+        <div class="playhead" id="playhead"></div>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    Playback speed and pitch move together per note — that pitch/speed link is the classic YTPMV chipmunk sound, not a bug.
+    Recording captures the canvas + audio live, so keep this tab in the foreground while it runs.
+    Pitch detection is a rough guess from autocorrelation, not a tuner — always sanity-check the base note.
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
+<script>
+(function(){
+  const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const GM_INSTRUMENTS = [
+    'Acoustic Grand Piano','Bright Acoustic Piano','Electric Grand Piano','Honky-tonk Piano','Electric Piano 1','Electric Piano 2','Harpsichord','Clavinet',
+    'Celesta','Glockenspiel','Music Box','Vibraphone','Marimba','Xylophone','Tubular Bells','Dulcimer',
+    'Drawbar Organ','Percussive Organ','Rock Organ','Church Organ','Reed Organ','Accordion','Harmonica','Tango Accordion',
+    'Acoustic Guitar (nylon)','Acoustic Guitar (steel)','Electric Guitar (jazz)','Electric Guitar (clean)','Electric Guitar (muted)','Overdriven Guitar','Distortion Guitar','Guitar Harmonics',
+    'Acoustic Bass','Electric Bass (finger)','Electric Bass (pick)','Fretless Bass','Slap Bass 1','Slap Bass 2','Synth Bass 1','Synth Bass 2',
+    'Violin','Viola','Cello','Contrabass','Tremolo Strings','Pizzicato Strings','Orchestral Harp','Timpani',
+    'String Ensemble 1','String Ensemble 2','Synth Strings 1','Synth Strings 2','Choir Aahs','Voice Oohs','Synth Voice','Orchestra Hit',
+    'Trumpet','Trombone','Tuba','Muted Trumpet','French Horn','Brass Section','Synth Brass 1','Synth Brass 2',
+    'Soprano Sax','Alto Sax','Tenor Sax','Baritone Sax','Oboe','English Horn','Bassoon','Clarinet',
+    'Piccolo','Flute','Recorder','Pan Flute','Blown Bottle','Shakuhachi','Whistle','Ocarina',
+    'Lead (square)','Lead (sawtooth)','Lead (calliope)','Lead (chiff)','Lead (charang)','Lead (voice)','Lead (fifths)','Lead (bass+lead)',
+    'Pad (new age)','Pad (warm)','Pad (polysynth)','Pad (choir)','Pad (bowed)','Pad (metallic)','Pad (halo)','Pad (sweep)',
+    'FX (rain)','FX (soundtrack)','FX (crystal)','FX (atmosphere)','FX (brightness)','FX (goblins)','FX (echoes)','FX (sci-fi)',
+    'Sitar','Banjo','Shamisen','Koto','Kalimba','Bag Pipe','Fiddle','Shanai',
+    'Tinkle Bell','Agogo','Steel Drums','Woodblock','Taiko Drum','Melodic Tom','Synth Drum','Reverse Cymbal',
+    'Guitar Fret Noise','Breath Noise','Seashore','Bird Tweet','Telephone Ring','Helicopter','Applause','Gunshot'
+  ];
+
+  // Slugs matching the standard "midi-js-soundfonts" FluidR3_GM instrument set, same order as GM_INSTRUMENTS above.
+  const GM_SF_NAMES = [
+    'acoustic_grand_piano','bright_acoustic_piano','electric_grand_piano','honkytonk_piano','electric_piano_1','electric_piano_2','harpsichord','clavinet',
+    'celesta','glockenspiel','music_box','vibraphone','marimba','xylophone','tubular_bells','dulcimer',
+    'drawbar_organ','percussive_organ','rock_organ','church_organ','reed_organ','accordion','harmonica','tango_accordion',
+    'acoustic_guitar_nylon','acoustic_guitar_steel','electric_guitar_jazz','electric_guitar_clean','electric_guitar_muted','overdriven_guitar','distortion_guitar','guitar_harmonics',
+    'acoustic_bass','electric_bass_finger','electric_bass_pick','fretless_bass','slap_bass_1','slap_bass_2','synth_bass_1','synth_bass_2',
+    'violin','viola','cello','contrabass','tremolo_strings','pizzicato_strings','orchestral_harp','timpani',
+    'string_ensemble_1','string_ensemble_2','synth_strings_1','synth_strings_2','choir_aahs','voice_oohs','synth_choir','orchestra_hit',
+    'trumpet','trombone','tuba','muted_trumpet','french_horn','brass_section','synth_brass_1','synth_brass_2',
+    'soprano_sax','alto_sax','tenor_sax','baritone_sax','oboe','english_horn','bassoon','clarinet',
+    'piccolo','flute','recorder','pan_flute','blown_bottle','shakuhachi','whistle','ocarina',
+    'lead_1_square','lead_2_sawtooth','lead_3_calliope','lead_4_chiff','lead_5_charang','lead_6_voice','lead_7_fifths','lead_8_bass_lead',
+    'pad_1_new_age','pad_2_warm','pad_3_polysynth','pad_4_choir','pad_5_bowed','pad_6_metallic','pad_7_halo','pad_8_sweep',
+    'fx_1_rain','fx_2_soundtrack','fx_3_crystal','fx_4_atmosphere','fx_5_brightness','fx_6_goblins','fx_7_echoes','fx_8_scifi',
+    'sitar','banjo','shamisen','koto','kalimba','bagpipe','fiddle','shanai',
+    'tinkle_bell','agogo','steel_drums','woodblock','taiko_drum','melodic_tom','synth_drum','reverse_cymbal',
+    'guitar_fret_noise','breath_noise','seashore','bird_tweet','telephone_ring','helicopter','applause','gunshot'
+  ];
+
+  function noteName(midi){ const m=((Math.round(midi)%12)+12)%12; return NOTE_NAMES[m]+(Math.floor(midi/12)-1); }
+  function buildNoteOptions(selectEl, defaultMidi){
+    selectEl.innerHTML='';
+    for(let m=24; m<=96; m++){
+      const opt = document.createElement('option');
+      opt.value = m; opt.textContent = noteName(m) + (m===defaultMidi?'  (default)':'');
+      if(m===defaultMidi) opt.selected = true;
+      selectEl.appendChild(opt);
+    }
+  }
+
+  const midiInput = document.getElementById('midiInput');
+  const clipInput = document.getElementById('clipInput');
+  const midiDrop = document.getElementById('midiDrop');
+  const clipDrop = document.getElementById('clipDrop');
+  const midiStats = document.getElementById('midiStats');
+  const clipStats = document.getElementById('clipStats');
+  const genStatus = document.getElementById('genStatus');
+  const btnPreview = document.getElementById('btnPreview');
+  const btnRecord = document.getElementById('btnRecord');
+  const btnStop = document.getElementById('btnStop');
+  const canvas = document.getElementById('canvas');
+  const ctx2d = canvas.getContext('2d');
+  const tracker = document.getElementById('tracker');
+  const playhead = document.getElementById('playhead');
+  const downloadLink = document.getElementById('downloadLink');
+  const btnProperExport = document.getElementById('btnProperExport');
+  const btnCancelExport = document.getElementById('btnCancelExport');
+  const exportFpsSelect = document.getElementById('exportFpsSelect');
+  const exportProgress = document.getElementById('exportProgress');
+  const properDownloadLink = document.getElementById('properDownloadLink');
+  const baseNoteSelect = document.getElementById('baseNote');
+  const anticipateToggle = document.getElementById('anticipateToggle');
+  const anticipateAmountRow = document.getElementById('anticipateAmountRow');
+  const anticipateMsInput = document.getElementById('anticipateMs');
+  const showLabelsToggle = document.getElementById('showLabelsToggle');
+  const reduceStrobeToggle = document.getElementById('reduceStrobeToggle');
+  const scanlineToggle = document.getElementById('scanlineToggle');
+  const resolutionSelect = document.getElementById('resolutionSelect');
+  resolutionSelect.addEventListener('change', ()=>{
+    const [w,h] = resolutionSelect.value.split('x').map(Number);
+    canvas.width = w;
+    canvas.height = h;
+  });
+  anticipateToggle.addEventListener('change', ()=>{
+    anticipateAmountRow.style.display = anticipateToggle.checked ? 'block' : 'none';
+  });
+  const trackPanel = document.getElementById('trackPanel');
+  const trackList = document.getElementById('trackList');
+  document.getElementById('selectAllTracks').addEventListener('click', ()=>{
+    state.tracks.forEach(t=> t.enabled = true);
+    trackList.querySelectorAll('.track-enable-checkbox').forEach(cb=>{
+      cb.checked = true;
+      cb.closest('.track-row').classList.remove('track-disabled');
+    });
+  });
+  document.getElementById('selectNoneTracks').addEventListener('click', ()=>{
+    state.tracks.forEach(t=> t.enabled = false);
+    trackList.querySelectorAll('.track-enable-checkbox').forEach(cb=>{
+      cb.checked = false;
+      cb.closest('.track-row').classList.add('track-disabled');
+    });
+  });
+
+  buildNoteOptions(baseNoteSelect, 60);
+
+  [midiDrop, clipDrop].forEach(el=>{
+    el.addEventListener('dragover', e=>{ e.preventDefault(); el.classList.add('drag'); });
+    el.addEventListener('dragleave', ()=> el.classList.remove('drag'));
+    el.addEventListener('drop', ()=> el.classList.remove('drag'));
+  });
+
+  let audioCtx = null;
+  function setupAudioContext(){
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state === 'suspended') audioCtx.resume();
+  }
+
+  // ---------- MIDI parsing (per-track) ----------
+  function parseMidi(buffer){
+    const view = new DataView(buffer);
+    let pos = 0;
+    function readStr(len){ let s=''; for(let i=0;i<len;i++) s+=String.fromCharCode(view.getUint8(pos++)); return s; }
+    function readUint32(){ const v=view.getUint32(pos); pos+=4; return v; }
+    function readUint16(){ const v=view.getUint16(pos); pos+=2; return v; }
+    function readUint8(){ return view.getUint8(pos++); }
+    function readVarLen(){
+      let value=0, byte;
+      do { byte=readUint8(); value=(value<<7)|(byte&0x7f); } while(byte&0x80);
+      return value;
+    }
+
+    if(readStr(4) !== 'MThd') throw new Error('That file does not look like a Standard MIDI File.');
+    readUint32();
+    readUint16();
+    const numTracks = readUint16();
+    const division = readUint16();
+    if(division & 0x8000) throw new Error('This MIDI file uses SMPTE timecode, which is not supported. Export it using ticks-per-quarter-note timing instead.');
+    const ppq = division;
+
+    const rawTracks = [];
+    for(let t=0; t<numTracks; t++){
+      if(pos >= buffer.byteLength) break;
+      const chunkId = readStr(4);
+      const chunkLen = readUint32();
+      const end = pos + chunkLen;
+      if(chunkId !== 'MTrk'){ pos = end; continue; }
+      let tick = 0, runningStatus = null, trackName = null, program = null, firstChannel = null;
+      const events = [];
+      while(pos < end){
+        const delta = readVarLen();
+        tick += delta;
+        let statusByte = readUint8();
+        if(statusByte < 0x80){ pos--; statusByte = runningStatus; }
+        else { runningStatus = statusByte; }
+        if(statusByte === 0xFF){
+          const metaType = readUint8();
+          const len = readVarLen();
+          if(metaType === 0x51){
+            const usPerQuarter = (view.getUint8(pos)<<16)|(view.getUint8(pos+1)<<8)|view.getUint8(pos+2);
+            events.push({tick, type:'tempo', usPerQuarter});
+          } else if(metaType === 0x03 && trackName === null){
+            let s=''; for(let k=0;k<len;k++) s+=String.fromCharCode(view.getUint8(pos+k));
+            trackName = s.trim();
+          }
+          pos += len;
+        } else if(statusByte === 0xF0 || statusByte === 0xF7){
+          const len = readVarLen(); pos += len;
+        } else {
+          const type = statusByte & 0xf0;
+          const channel = statusByte & 0x0f;
+          if(type === 0x90){
+            const note = readUint8(), vel = readUint8();
+            if(firstChannel===null) firstChannel = channel;
+            events.push({tick, type: vel>0 ? 'noteOn':'noteOff', note, channel});
+          } else if(type === 0x80){
+            const note = readUint8(); readUint8();
+            if(firstChannel===null) firstChannel = channel;
+            events.push({tick, type:'noteOff', note, channel});
+          } else if(type === 0xC0){
+            program = readUint8();
+            if(firstChannel===null) firstChannel = channel;
+          } else if(type===0xA0||type===0xB0||type===0xE0){
+            readUint8(); readUint8();
+          } else if(type===0xD0){
+            readUint8();
+          } else {
+            readUint8(); readUint8();
+          }
+        }
+      }
+      rawTracks.push({events, trackName, program, firstChannel});
+    }
+
+    // Global tempo map from every track's tempo meta events
+    let tempoEvents = [];
+    rawTracks.forEach(tr => tr.events.forEach(e=>{ if(e.type==='tempo') tempoEvents.push({tick:e.tick, usPerQuarter:e.usPerQuarter}); }));
+    tempoEvents.sort((a,b)=>a.tick-b.tick);
+    if(tempoEvents.length===0 || tempoEvents[0].tick>0) tempoEvents.unshift({tick:0, usPerQuarter:500000});
+    let cumSeconds=0, lastTick=0, lastTempo=tempoEvents[0].usPerQuarter;
+    const tempoMap = [];
+    tempoEvents.forEach((te,i)=>{
+      if(i>0) cumSeconds += (te.tick-lastTick)*lastTempo/1e6/ppq;
+      tempoMap.push({tick:te.tick, usPerQuarter:te.usPerQuarter, secondsAtTick:cumSeconds});
+      lastTick=te.tick; lastTempo=te.usPerQuarter;
+    });
+    function ticksToSeconds(tick){
+      let seg = tempoMap[0];
+      for(let i=0;i<tempoMap.length;i++){ if(tempoMap[i].tick<=tick) seg=tempoMap[i]; else break; }
+      return seg.secondsAtTick + (tick-seg.tick)*seg.usPerQuarter/1e6/ppq;
+    }
+
+    // Pair note on/off PER TRACK (not merged globally — avoids cross-track mispairing)
+    const tracks = [];
+    rawTracks.forEach((tr, rawIdx)=>{
+      const stacks = {};
+      const pairs = [];
+      const noteEvents = tr.events.filter(e=>e.type==='noteOn'||e.type==='noteOff').sort((a,b)=>a.tick-b.tick);
+      noteEvents.forEach(e=>{
+        const key = e.channel+'-'+e.note;
+        if(e.type==='noteOn'){ (stacks[key]=stacks[key]||[]).push(e.tick); }
+        else if(stacks[key] && stacks[key].length){
+          const startTick = stacks[key].shift();
+          pairs.push({startTick, endTick:e.tick, note:e.note});
+        }
+      });
+      if(!pairs.length) return;
+      const notes = pairs.map(n=>({
+        time: ticksToSeconds(n.startTick),
+        duration: Math.max(0.05, ticksToSeconds(n.endTick)-ticksToSeconds(n.startTick)),
+        midi: n.note
+      })).sort((a,b)=>a.time-b.time);
+
+      const isDrum = tr.firstChannel === 9;
+      const instrumentName = isDrum ? 'Drum Kit / Percussion' : (GM_INSTRUMENTS[tr.program||0] || 'Unknown Instrument');
+      const label = tr.trackName ? (tr.trackName + ' (' + instrumentName + ')') : instrumentName;
+      let lo=127,hi=0;
+      notes.forEach(n=>{ lo=Math.min(lo,n.midi); hi=Math.max(hi,n.midi); });
+
+      tracks.push({ index: tracks.length, label, notes, lowMidi:lo, highMidi:hi, isDrum, program: tr.program||0 });
+    });
+
+    return tracks;
+  }
+
+  // ---------- Pitch / percussion detection ----------
+  function detectPitch(buffer, rangeStart, rangeEnd){
+    const sr = buffer.sampleRate;
+    let mono;
+    if(buffer.numberOfChannels>1){
+      const ch0=buffer.getChannelData(0), ch1=buffer.getChannelData(1);
+      mono = new Float32Array(ch0.length);
+      for(let i=0;i<ch0.length;i++) mono[i]=(ch0[i]+ch1[i])/2;
+    } else mono = buffer.getChannelData(0);
+
+    const rStart = Math.max(0, Math.floor((rangeStart||0)*sr));
+    const rEnd = Math.min(mono.length, Math.ceil((rangeEnd==null ? buffer.duration : rangeEnd)*sr));
+
+    const winLen = Math.min(rEnd-rStart, Math.floor(sr*0.3));
+    if(winLen < 512) return null;
+    const stepScan = Math.floor(sr*0.02);
+    const scanCap = Math.min(rEnd, rStart + sr*2); // only need ~2s worth of scanning to find a good window within the range
+    let bestEnergy=-1, startIdx=rStart;
+    for(let s=rStart; s+winLen<=rEnd && s < scanCap; s+=stepScan){
+      let energy=0;
+      const probeLen = Math.min(2048, winLen);
+      for(let i=s;i<s+probeLen;i++) energy += mono[i]*mono[i];
+      if(energy>bestEnergy){ bestEnergy=energy; startIdx=s; }
+    }
+    const win = mono.subarray(startIdx, startIdx+winLen);
+    let maxAbs=0;
+    for(let i=0;i<win.length;i++) maxAbs = Math.max(maxAbs, Math.abs(win[i]));
+    if(maxAbs < 1e-4) return null;
+
+    const minFreq=50, maxFreq=1200;
+    const minLag = Math.max(1, Math.floor(sr/maxFreq));
+    const maxLag = Math.min(win.length-1, Math.floor(sr/minFreq));
+
+    let zeroLagEnergy=0;
+    for(let i=0;i<win.length;i++) zeroLagEnergy += win[i]*win[i];
+
+    let bestLag=-1, bestVal=-Infinity;
+    for(let lag=minLag; lag<=maxLag; lag++){
+      let sum=0;
+      const n = win.length-lag;
+      for(let i=0;i<n;i++){ sum += win[i]*win[i+lag]; }
+      const norm = sum/n;
+      if(norm>bestVal){ bestVal=norm; bestLag=lag; }
+    }
+    if(bestLag<=0) return null;
+    const freq = sr/bestLag;
+    const avgEnergyPerSample = zeroLagEnergy/win.length;
+    const confidence = avgEnergyPerSample>0 ? Math.max(0, Math.min(1, bestVal/avgEnergyPerSample)) : 0;
+    const midiFloat = 69 + 12*Math.log2(freq/440);
+    return { freq, midi: Math.round(midiFloat), confidence };
+  }
+
+  // ---------- Clip slots ----------
+  function createClipSlot(){
+    const v = document.createElement('video');
+    v.muted = true; v.playsInline = true; v.style.display='none';
+    document.body.appendChild(v);
+    return { videoEl: v, buffer:null, hasVideo:false, baseNote:60, startOffset:0, endOffset:null, videoURL:null };
+  }
+
+  // Copies another slot's current buffer/video/trim/pitch into a brand new, independent
+  // slot — used to "lock in" the default clip onto a track so later changes to the
+  // default don't silently change that track too.
+  function cloneClipSlot(source){
+    const slot = createClipSlot();
+    slot.buffer = source.buffer;
+    slot.hasVideo = source.hasVideo;
+    slot.baseNote = source.baseNote;
+    slot.startOffset = source.startOffset;
+    slot.endOffset = source.endOffset;
+    slot.videoURL = source.videoURL;
+    if(source.videoURL) slot.videoEl.src = source.videoURL;
+    return slot;
+  }
+
+  function drawWaveform(canvasEl, buffer, viewStart, viewEnd){
+    const c = canvasEl.getContext('2d');
+    const w = canvasEl.width, h = canvasEl.height;
+    c.fillStyle = '#0d0b16'; c.fillRect(0,0,w,h);
+    const data = buffer.getChannelData(0);
+    const sr = buffer.sampleRate;
+    const startSample = Math.max(0, Math.floor(viewStart*sr));
+    const endSample = Math.min(data.length, Math.ceil(viewEnd*sr));
+    const span = Math.max(1, endSample-startSample);
+    const step = Math.max(1, Math.ceil(span/w));
+    const mid = h/2;
+    c.strokeStyle = 'rgba(41,241,255,0.85)';
+    c.lineWidth = 1;
+    c.beginPath();
+    for(let x=0; x<w; x++){
+      let min=1, max=-1;
+      const start = startSample + x*step;
+      for(let i=start; i<start+step && i<endSample; i++){
+        const v = data[i];
+        if(v<min) min=v;
+        if(v>max) max=v;
+      }
+      if(max<min){ min=0; max=0; }
+      c.moveTo(x, mid+min*mid*0.9);
+      c.lineTo(x, mid+max*mid*0.9);
+    }
+    c.stroke();
+  }
+
+  function drawTrimOverlay(canvasEl, buffer, startOffset, endOffset, viewStart, viewEnd){
+    const c = canvasEl.getContext('2d');
+    const w = canvasEl.width, h = canvasEl.height;
+    const span = Math.max(1e-6, viewEnd-viewStart);
+    const timeToX = t => ((t-viewStart)/span)*w;
+    const xStart = timeToX(startOffset), xEnd = timeToX(endOffset);
+    const cxStart = Math.max(0, Math.min(w, xStart)), cxEnd = Math.max(0, Math.min(w, xEnd));
+    c.fillStyle = 'rgba(0,0,0,0.6)';
+    if(xStart > 0) c.fillRect(0,0,cxStart,h);
+    if(xEnd < w) c.fillRect(cxEnd,0,w-cxEnd,h);
+    if(xStart >= -2 && xStart <= w+2){ c.strokeStyle='#ff2ea6'; c.lineWidth=2; c.beginPath(); c.moveTo(xStart,0); c.lineTo(xStart,h); c.stroke(); }
+    if(xEnd >= -2 && xEnd <= w+2){ c.strokeStyle='#29f1ff'; c.beginPath(); c.moveTo(xEnd,0); c.lineTo(xEnd,h); c.stroke(); }
+  }
+
+  function autoDetectTrim(buffer){
+    const sr = buffer.sampleRate;
+    let mono;
+    if(buffer.numberOfChannels > 1){
+      const ch0 = buffer.getChannelData(0), ch1 = buffer.getChannelData(1);
+      mono = new Float32Array(ch0.length);
+      for(let i=0;i<ch0.length;i++) mono[i] = (ch0[i]+ch1[i])/2;
+    } else mono = buffer.getChannelData(0);
+
+    const winSize = Math.max(1, Math.floor(sr*0.02)); // 20ms windows
+    const numWindows = Math.floor(mono.length/winSize);
+    if(numWindows < 2) return { start:0, end: buffer.duration };
+
+    const rms = new Float32Array(numWindows);
+    let peak = 0;
+    for(let w=0; w<numWindows; w++){
+      let sum = 0;
+      const start = w*winSize;
+      for(let i=start; i<start+winSize; i++) sum += mono[i]*mono[i];
+      const r = Math.sqrt(sum/winSize);
+      rms[w] = r;
+      if(r > peak) peak = r;
+    }
+    if(peak < 1e-5) return { start:0, end: buffer.duration }; // effectively silent throughout
+
+    // Anchor on the loudest window (the main hit), then walk backward/forward from
+    // there to find where it actually rises out of / decays into quiet — this finds
+    // the real attack, rather than stopping at the first faint sound anywhere earlier.
+    let peakIdx = 0, peakVal = -Infinity;
+    for(let w=0; w<numWindows; w++){ if(rms[w] > peakVal){ peakVal = rms[w]; peakIdx = w; } }
+
+    const startThreshold = peak*0.25; // has to be a real part of the attack, not just audible
+    const endThreshold = peak*0.08;   // tails can decay quietly, so allow a lower bar there
+
+    let firstIdx = 0;
+    for(let w=peakIdx; w>=0; w--){
+      if(rms[w] < startThreshold){ firstIdx = w+1; break; }
+      if(w===0) firstIdx = 0;
+    }
+    let lastIdx = numWindows-1;
+    for(let w=numWindows-1; w>=peakIdx; w--){ if(rms[w] >= endThreshold){ lastIdx=w; break; } }
+
+    const padStart = 0.01, padEnd = 0.08;
+    let start = Math.max(0, (firstIdx*winSize/sr) - padStart);
+    let end = Math.min(buffer.duration, ((lastIdx+1)*winSize/sr) + padEnd);
+    if(end <= start){ start = 0; end = buffer.duration; }
+    return { start, end };
+  }
+
+  function attachTrimUI(container, slot, selectEl, statusEl){
+    container.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'trim-wrap';
+    wrap.innerHTML =
+      '<canvas class="waveform" width="700" height="60"></canvas>'+
+      '<div class="trim-row">'+
+        '<span class="trim-readout"></span>'+
+        '<button class="mini-btn auto-trim">✨ auto-trim</button>'+
+        '<button class="mini-btn preview-trim">▶ hear trimmed clip</button>'+
+        '<button class="mini-btn recheck-pitch">🎯 re-check pitch here</button>'+
+        '<button class="mini-btn reset-trim">reset trim</button>'+
+        '<button class="mini-btn zoom-fit">zoom out ⤢</button>'+
+      '</div>'+
+      '<div class="trim-row">'+
+        '<label style="font-size:11px;color:var(--muted);">start <input type="number" class="trim-start-input" step="0.01" style="width:80px;background:#100e18;color:var(--text);border:1px solid var(--panel-line);border-radius:3px;padding:4px 6px;"></label>'+
+        '<label style="font-size:11px;color:var(--muted);">end <input type="number" class="trim-end-input" step="0.01" style="width:80px;background:#100e18;color:var(--text);border:1px solid var(--panel-line);border-radius:3px;padding:4px 6px;"></label>'+
+        '<span style="font-size:11px;color:var(--muted);">seconds — exact, for long clips</span>'+
+      '</div>';
+    container.appendChild(wrap);
+    const canvasEl = wrap.querySelector('.waveform');
+    const readout = wrap.querySelector('.trim-readout');
+    const startInput = wrap.querySelector('.trim-start-input');
+    const endInput = wrap.querySelector('.trim-end-input');
+    const buffer = slot.buffer;
+    if(slot.endOffset == null) slot.endOffset = buffer.duration;
+    slot.viewStart = 0;
+    slot.viewEnd = buffer.duration;
+    slot.trimHistory = slot.trimHistory || [];
+    slot.redoHistory = slot.redoHistory || [];
+    function pushHistory(){
+      slot.trimHistory.push({ start: slot.startOffset||0, end: slot.endOffset });
+      if(slot.trimHistory.length > 20) slot.trimHistory.shift();
+      slot.redoHistory = [];
+    }
+    function undoTrim(){
+      if(!slot.trimHistory.length) return false;
+      const prev = slot.trimHistory.pop();
+      slot.redoHistory.push({ start: slot.startOffset||0, end: slot.endOffset });
+      if(slot.redoHistory.length > 20) slot.redoHistory.shift();
+      slot.startOffset = prev.start;
+      slot.endOffset = prev.end;
+      redraw();
+      return true;
+    }
+    function redoTrim(){
+      if(!slot.redoHistory.length) return false;
+      const next = slot.redoHistory.pop();
+      slot.trimHistory.push({ start: slot.startOffset||0, end: slot.endOffset });
+      if(slot.trimHistory.length > 20) slot.trimHistory.shift();
+      slot.startOffset = next.start;
+      slot.endOffset = next.end;
+      redraw();
+      return true;
+    }
+
+    let recheckTimer = null;
+    function scheduleAutoRecheck(){
+      if(!selectEl) return;
+      clearTimeout(recheckTimer);
+      recheckTimer = setTimeout(()=>{
+        const result = detectPitch(buffer, slot.startOffset||0, slot.endOffset);
+        if(result && result.confidence > 0.35){
+          const clamped = Math.max(24, Math.min(96, result.midi));
+          slot.baseNote = clamped;
+          selectEl.value = String(clamped);
+          const word = result.confidence > 0.6 ? 'sounds like' : 'rough guess —';
+          if(statusEl) statusEl.innerHTML = 'Auto-rechecked '+(slot.startOffset||0).toFixed(2)+'s–'+slot.endOffset.toFixed(2)+'s · '+word+' <b>'+noteName(result.midi)+'</b> ('+result.freq.toFixed(0)+'Hz, '+Math.round(result.confidence*100)+'% confident)';
+        } else if(statusEl) {
+          statusEl.innerHTML = 'Auto-rechecked '+(slot.startOffset||0).toFixed(2)+'s–'+slot.endOffset.toFixed(2)+'s · sounds percussive there — base note left as is';
+        }
+      }, 450);
+    }
+
+    function redraw(){
+      drawWaveform(canvasEl, buffer, slot.viewStart, slot.viewEnd);
+      drawTrimOverlay(canvasEl, buffer, slot.startOffset||0, slot.endOffset, slot.viewStart, slot.viewEnd);
+      const zoomedNote = (slot.viewEnd-slot.viewStart) < buffer.duration-0.01
+        ? ' — viewing '+slot.viewStart.toFixed(2)+'s–'+slot.viewEnd.toFixed(2)+'s (scroll to zoom, dbl-click to reset)'
+        : ' — scroll on the wave to zoom in for precision';
+      readout.textContent = 'Using '+(slot.startOffset||0).toFixed(2)+'s to '+slot.endOffset.toFixed(2)+'s of '+buffer.duration.toFixed(2)+'s'+zoomedNote;
+      startInput.value = (slot.startOffset||0).toFixed(3);
+      endInput.value = slot.endOffset.toFixed(3);
+      scheduleAutoRecheck();
+    }
+    redraw();
+
+    function nearestHandle(frac){
+      const startFrac = (slot.startOffset||0)/buffer.duration;
+      const endFrac = slot.endOffset/buffer.duration;
+      return Math.abs(frac-startFrac) <= Math.abs(frac-endFrac) ? 'start' : 'end';
+    }
+    let draggingHandle = null;
+    function setFromEvent(e){
+      const rect = canvasEl.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const viewFrac = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+      const t = slot.viewStart + viewFrac*(slot.viewEnd-slot.viewStart);
+      if(!draggingHandle) draggingHandle = nearestHandle(t/buffer.duration);
+      if(draggingHandle === 'start'){
+        slot.startOffset = Math.max(0, Math.min(t, slot.endOffset-0.02));
+      } else {
+        slot.endOffset = Math.min(buffer.duration, Math.max(t, (slot.startOffset||0)+0.02));
+      }
+      redraw();
+    }
+    canvasEl.addEventListener('mousedown', e=>{ pushHistory(); setFromEvent(e); });
+    window.addEventListener('mousemove', e=>{ if(draggingHandle) setFromEvent(e); });
+    window.addEventListener('mouseup', ()=>{ draggingHandle=null; });
+    canvasEl.addEventListener('touchstart', e=>{ pushHistory(); setFromEvent(e); });
+    canvasEl.addEventListener('touchmove', e=>{ if(draggingHandle) setFromEvent(e); });
+    canvasEl.addEventListener('touchend', ()=>{ draggingHandle=null; });
+
+    canvasEl.addEventListener('wheel', e=>{
+      e.preventDefault();
+      const rect = canvasEl.getBoundingClientRect();
+      const frac = Math.max(0, Math.min(1, (e.clientX-rect.left)/rect.width));
+      const curSpan = slot.viewEnd - slot.viewStart;
+      const cursorTime = slot.viewStart + frac*curSpan;
+      const zoomFactor = e.deltaY < 0 ? 0.8 : 1.25;
+      const minSpan = Math.min(0.05, buffer.duration);
+      let newSpan = Math.max(minSpan, Math.min(buffer.duration, curSpan*zoomFactor));
+      let newStart = cursorTime - frac*newSpan;
+      let newEnd = newStart + newSpan;
+      if(newStart < 0){ newEnd -= newStart; newStart = 0; }
+      if(newEnd > buffer.duration){ newStart -= (newEnd-buffer.duration); newEnd = buffer.duration; }
+      slot.viewStart = Math.max(0, newStart);
+      slot.viewEnd = Math.min(buffer.duration, newEnd);
+      redraw();
+    }, { passive:false });
+    canvasEl.addEventListener('dblclick', ()=>{ slot.viewStart = 0; slot.viewEnd = buffer.duration; redraw(); });
+
+    canvasEl.addEventListener('mouseenter', ()=>{ hoveredTrimCtx = { slot, buffer, redraw, pushHistory, undoTrim, redoTrim }; });
+    canvasEl.addEventListener('mouseleave', ()=>{ if(hoveredTrimCtx && hoveredTrimCtx.slot===slot) hoveredTrimCtx = null; });
+
+    wrap.querySelector('.auto-trim').addEventListener('click', ()=>{
+      pushHistory();
+      const guess = autoDetectTrim(buffer);
+      slot.startOffset = guess.start;
+      slot.endOffset = guess.end;
+      redraw();
+    });
+    wrap.querySelector('.reset-trim').addEventListener('click', ()=>{ pushHistory(); slot.startOffset = 0; slot.endOffset = buffer.duration; redraw(); });
+    wrap.querySelector('.recheck-pitch').addEventListener('click', ()=>{
+      const result = detectPitch(buffer, slot.startOffset||0, slot.endOffset);
+      if(!selectEl){ return; }
+      if(result && result.confidence > 0.35){
+        const clamped = Math.max(24, Math.min(96, result.midi));
+        slot.baseNote = clamped;
+        selectEl.value = String(clamped);
+        const word = result.confidence > 0.6 ? 'sounds like' : 'rough guess —';
+        if(statusEl) statusEl.innerHTML = 'Re-checked '+(slot.startOffset||0).toFixed(2)+'s–'+slot.endOffset.toFixed(2)+'s · '+word+' <b>'+noteName(result.midi)+'</b> ('+result.freq.toFixed(0)+'Hz, '+Math.round(result.confidence*100)+'% confident)';
+      } else {
+        if(statusEl) statusEl.innerHTML = 'Re-checked '+(slot.startOffset||0).toFixed(2)+'s–'+slot.endOffset.toFixed(2)+'s · sounds percussive there — base note left as is';
+      }
+    });
+    wrap.querySelector('.zoom-fit').addEventListener('click', ()=>{ slot.viewStart = 0; slot.viewEnd = buffer.duration; redraw(); });
+    startInput.addEventListener('change', ()=>{
+      pushHistory();
+      let v = parseFloat(startInput.value); if(isNaN(v)) v = 0;
+      slot.startOffset = Math.max(0, Math.min(v, slot.endOffset-0.01));
+      redraw();
+    });
+    endInput.addEventListener('change', ()=>{
+      pushHistory();
+      let v = parseFloat(endInput.value); if(isNaN(v)) v = buffer.duration;
+      slot.endOffset = Math.min(buffer.duration, Math.max(v, (slot.startOffset||0)+0.01));
+      redraw();
+    });
+    wrap.querySelector('.preview-trim').addEventListener('click', ()=>{
+      stopPlayback();
+      setupAudioContext();
+      const src = audioCtx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(audioCtx.destination);
+      const dur = Math.max(0, slot.endOffset - (slot.startOffset||0));
+      if(dur > 0) src.start(audioCtx.currentTime, slot.startOffset||0, dur);
+      adHocStoppers.push(()=>{ try{ src.stop(); }catch(e){} });
+      if(slot.hasVideo){
+        try{
+          slot.videoEl.currentTime = slot.startOffset||0;
+          slot.videoEl.play().catch(()=>{});
+          const pauseTimer = setTimeout(()=>{ try{ slot.videoEl.pause(); }catch(e){} }, dur*1000+50);
+          adHocStoppers.push(()=>{ clearTimeout(pauseTimer); try{ slot.videoEl.pause(); }catch(e){} });
+        }catch(e){}
+      }
+    });
+  }
+
+  function waitForVideoProbe(videoEl, timeoutMs){
+    return new Promise(resolve=>{
+      let done = false;
+      function finish(result){
+        if(done) return;
+        done = true;
+        videoEl.removeEventListener('loadedmetadata', onMeta);
+        videoEl.removeEventListener('error', onErr);
+        resolve(result);
+      }
+      function onMeta(){ finish({ hasVideo: videoEl.videoWidth > 0, failed: false }); }
+      function onErr(){ finish({ hasVideo: false, failed: true }); }
+      videoEl.addEventListener('loadedmetadata', onMeta);
+      videoEl.addEventListener('error', onErr);
+      setTimeout(()=> finish({ hasVideo: videoEl.videoWidth > 0, failed: videoEl.videoWidth === 0 }), timeoutMs);
+    });
+  }
+
+  function loadFileIntoSlot(file, slot, statusEl, selectEl, trimEl){
+    setupAudioContext();
+    statusEl.classList.remove('err');
+    statusEl.textContent = 'Reading clip…';
+    slot.buffer = null; slot.hasVideo = false; slot.startOffset = 0; slot.endOffset = null;
+    if(trimEl) trimEl.innerHTML = '';
+
+    const url = URL.createObjectURL(file);
+    slot.videoURL = url;
+    slot.videoEl.src = url;
+    const videoProbe = waitForVideoProbe(slot.videoEl, 1500);
+
+    file.arrayBuffer().then(buf=>{
+      audioCtx.decodeAudioData(buf.slice(0)).then(decoded=>{
+        slot.buffer = decoded;
+        videoProbe.then(probe=>{
+          slot.hasVideo = probe.hasVideo;
+          const result = detectPitch(decoded);
+          let visualNote = '';
+          if(!slot.hasVideo){
+            visualNote = probe.failed
+              ? " · this browser can't decode the picture in this file (likely an unsupported video codec — try re-exporting as H.264 MP4 or VP9 WebM) — audio will still play, using a placeholder visual"
+              : ' · audio only, using a placeholder visual';
+          }
+          let trimNote = '';
+          if(decoded.duration < 35){
+            const guess = autoDetectTrim(decoded);
+            slot.startOffset = guess.start;
+            slot.endOffset = guess.end;
+            trimNote = ' · auto-trimmed (hit "reset trim" below if you don\'t want that)';
+          }
+          if(result && result.confidence > 0.35){
+            const clamped = Math.max(24, Math.min(96, result.midi));
+            slot.baseNote = clamped;
+            selectEl.value = String(clamped);
+            const word = result.confidence > 0.6 ? 'sounds like' : 'rough guess —';
+            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · '+word+' <b>'+noteName(result.midi)+'</b> ('+result.freq.toFixed(0)+'Hz, '+Math.round(result.confidence*100)+'% confident)'+visualNote+trimNote;
+          } else {
+            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · sounds percussive (more of a hit or slap than a clear note) — pitch-shifting will still run, just won\'t sound like a melody'+visualNote+trimNote;
+          }
+          if(probe.failed) statusEl.classList.add('err');
+          if(trimEl) attachTrimUI(trimEl, slot, selectEl, statusEl);
+          refreshButtons();
+        });
+      }).catch(()=>{
+        statusEl.textContent = "Couldn't read audio from that file. Try a plain audio file (mp3/wav) or a standard mp4/webm video.";
+        statusEl.classList.add('err');
+      });
+    });
+  }
+
+  // ---------- State ----------
+  const state = {
+    tracks: [],
+    allNotesFlat: [],
+    defaultClip: createClipSlot(),
+    trackClips: {},
+    scheduleList: [],
+    gridTracks: []
+  };
+  let playing = false;
+  let exporting = false;
+  let exportCancelled = false;
+  let scheduledSources = [];
+  let animId = null;
+  let playbackStartPerf = 0;
+  let playbackTimeoutId = null;
+  let adHocStoppers = [];
+  function stopAdHocPreviews(){
+    adHocStoppers.forEach(fn=>{ try{ fn(); }catch(e){} });
+    adHocStoppers = [];
+  }
+
+  // Whichever trim waveform the mouse is currently over, if any — lets 0-9 snap
+  // the nearer handle to that tenth of the clip, like YouTube's seek shortcut.
+  let hoveredTrimCtx = null;
+  document.addEventListener('keydown', e=>{
+    if(!hoveredTrimCtx) return;
+    const active = document.activeElement;
+    if(active && (active.tagName==='INPUT' || active.tagName==='SELECT' || active.tagName==='TEXTAREA')) return;
+    if((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase()==='z'){
+      e.preventDefault();
+      hoveredTrimCtx.redoTrim();
+      return;
+    }
+    if((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='z'){
+      e.preventDefault();
+      hoveredTrimCtx.undoTrim();
+      return;
+    }
+    if(e.key >= '0' && e.key <= '9'){
+      e.preventDefault();
+      const { slot, buffer, redraw, pushHistory } = hoveredTrimCtx;
+      pushHistory();
+      const frac = parseInt(e.key,10)/10;
+      let start = frac*buffer.duration;
+      let end = start + 1;
+      if(end > buffer.duration){
+        end = buffer.duration;
+        start = Math.max(0, end - 1);
+      }
+      slot.startOffset = start;
+      slot.endOffset = end;
+      redraw();
+    }
+  });
+  let totalDuration = 0;
+
+  function computeTotalDuration(){
+    if(!state.allNotesFlat.length) return 0;
+    let end = 0;
+    state.allNotesFlat.forEach(n=>{ end = Math.max(end, n.time+n.duration); });
+    return end + 0.4;
+  }
+
+  function refreshButtons(){
+    const ready = state.allNotesFlat.length > 0 && !!state.defaultClip.buffer;
+    btnPreview.disabled = !ready || playing;
+    btnRecord.disabled = !ready || playing;
+    btnStop.disabled = !playing;
+    resolutionSelect.disabled = playing;
+    if(!exporting) btnProperExport.disabled = !ready || playing;
+  }
+
+  function drawTrackerTicks(){
+    tracker.querySelectorAll('.notebar').forEach(n=>n.remove());
+    if(!state.allNotesFlat.length) return;
+    const dur = computeTotalDuration();
+    state.allNotesFlat.forEach(n=>{
+      const bar = document.createElement('div');
+      bar.className = 'notebar';
+      bar.style.left = ((n.time/dur)*100)+'%';
+      bar.style.height = Math.max(4,Math.min(26, 6+((n.midi-36)/48)*18))+'px';
+      tracker.appendChild(bar);
+    });
+  }
+
+  function renderMiniRoll(canvasEl, notes, dur){
+    const c = canvasEl.getContext('2d');
+    const w = canvasEl.width, h = canvasEl.height;
+    c.fillStyle = '#0d0b16'; c.fillRect(0,0,w,h);
+    if(!notes.length || dur<=0) return;
+    let lo=127,hi=0;
+    notes.forEach(n=>{ lo=Math.min(lo,n.midi); hi=Math.max(hi,n.midi); });
+    if(lo===hi){ lo-=3; hi+=3; }
+    notes.forEach(n=>{
+      const x = (n.time/dur)*w;
+      const nw = Math.max(1.5,(n.duration/dur)*w);
+      const y = h - ((n.midi-lo)/(hi-lo))*(h-6) - 4;
+      c.fillStyle = 'hsl('+(198+((n.midi-lo)*5))+',80%,60%)';
+      c.fillRect(x, y-3, nw, 4);
+    });
+  }
+
+  function scheduleDrumClick(ctx, destGain, time, dur){
+    const len = Math.max(1, Math.floor(ctx.sampleRate*0.15));
+    const noiseBuf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = noiseBuf.getChannelData(0);
+    for(let i=0;i<len;i++) data[i] = (Math.random()*2-1)*Math.pow(1-i/len, 2);
+    const src = ctx.createBufferSource();
+    src.buffer = noiseBuf;
+    const g = ctx.createGain();
+    const clickDur = Math.min(dur, 0.18);
+    g.gain.setValueAtTime(0.8, time);
+    g.gain.exponentialRampToValueAtTime(0.001, time+clickDur);
+    src.connect(g); g.connect(destGain);
+    src.start(time); src.stop(time+clickDur+0.02);
+    adHocStoppers.push(()=>{ try{ src.stop(); }catch(e){} });
+  }
+
+  function playTrackWithTone(tr, startCtxTime, destGain){
+    tr.notes.forEach(n=>{
+      if(n.time > 10) return;
+      const osc = audioCtx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = 440*Math.pow(2,(n.midi-69)/12);
+      const ng = audioCtx.createGain();
+      const t0 = startCtxTime+n.time;
+      const dur = Math.min(n.duration, 1.2);
+      ng.gain.setValueAtTime(0,t0);
+      ng.gain.linearRampToValueAtTime(0.9,t0+0.01);
+      ng.gain.linearRampToValueAtTime(0,t0+dur);
+      osc.connect(ng); ng.connect(destGain);
+      osc.start(t0); osc.stop(t0+dur+0.02);
+      adHocStoppers.push(()=>{ try{ osc.stop(); }catch(e){} });
+    });
+  }
+
+  function previewTrackNotes(tr){
+    stopPlayback();
+    setupAudioContext();
+    const startCtxTime = audioCtx.currentTime + 0.05;
+    const g = audioCtx.createGain(); g.gain.value = 0.28; g.connect(audioCtx.destination);
+
+    if(tr.isDrum){
+      tr.notes.forEach(n=>{
+        if(n.time > 10) return;
+        scheduleDrumClick(audioCtx, g, startCtxTime+n.time, n.duration);
+      });
+      genStatus.textContent = 'Drum tracks preview as a generic click, not the exact GM kit sound per note.';
+      return;
+    }
+
+    if(!window.Soundfont){
+      playTrackWithTone(tr, startCtxTime, g);
+      return;
+    }
+
+    state.sfInstruments = state.sfInstruments || {};
+    const slug = GM_SF_NAMES[tr.program] || 'acoustic_grand_piano';
+    const cached = state.sfInstruments[slug];
+
+    function playWithInstrument(inst){
+      tr.notes.forEach(n=>{
+        if(n.time > 10) return;
+        const dur = Math.min(n.duration, 2);
+        try{
+          const player = inst.play(n.midi, startCtxTime+n.time, { duration: dur, gain: 2.2 });
+          if(player && typeof player.stop === 'function'){
+            adHocStoppers.push(()=>{ try{ player.stop(); }catch(e){} });
+          }
+        }catch(e){}
+      });
+    }
+
+    if(cached === 'failed'){ playTrackWithTone(tr, startCtxTime, g); return; }
+    if(cached){ playWithInstrument(cached); return; }
+
+    genStatus.textContent = 'Loading '+tr.label+' sound…';
+    Soundfont.instrument(audioCtx, slug, { destination: g }).then(inst=>{
+      state.sfInstruments[slug] = inst;
+      genStatus.textContent = '';
+      playWithInstrument(inst);
+    }).catch(()=>{
+      state.sfInstruments[slug] = 'failed';
+      playTrackWithTone(tr, startCtxTime, g);
+    });
+  }
+
+  function previewTrackWithClip(tr){
+    if(!tr.notes.length) return;
+    const clip = state.trackClips[tr.index] || state.defaultClip;
+    if(!clip || !clip.buffer){
+      genStatus.textContent = 'Give this track a clip, or load a default clip, before previewing it.';
+      return;
+    }
+    const minStart = Math.min(...tr.notes.map(n=>n.time));
+    const shifted = tr.notes.map(n=>({ time: n.time-minStart, duration: n.duration, midi: n.midi, trackIndex: tr.index }));
+    genStatus.textContent = 'Previewing "'+tr.label+'" with its clip…';
+    startPlayback(false, shifted);
+  }
+
+  function previewTrackWithDefaultClip(tr){
+    if(!tr.notes.length) return;
+    if(!state.defaultClip.buffer){
+      genStatus.textContent = 'Load a default clip first before previewing with it.';
+      return;
+    }
+    const minStart = Math.min(...tr.notes.map(n=>n.time));
+    const shifted = tr.notes.map(n=>({ time: n.time-minStart, duration: n.duration, midi: n.midi, trackIndex: tr.index }));
+    genStatus.textContent = 'Previewing "'+tr.label+'" with the default clip…';
+    startPlayback(false, shifted, state.defaultClip);
+  }
+
+  function renderTrackList(){
+    trackList.innerHTML = '';
+    const dur = computeTotalDuration();
+    state.tracks.forEach(tr=>{
+      const row = document.createElement('div');
+      row.className = 'track-row';
+      row.innerHTML =
+        '<div class="track-head">'+
+          '<label style="display:flex; align-items:center; flex-shrink:0;"><input type="checkbox" class="track-enable-checkbox" checked title="Include this track in Preview/Record"></label>'+
+          '<div class="track-name-wrap"><div class="track-name"></div><span class="main-badge" style="display:none;">★ likely main line</span></div>'+
+          '<div class="track-meta"></div>'+
+        '</div>'+
+        '<canvas class="miniroll" width="700" height="46"></canvas>'+
+        '<div class="track-controls">'+
+          '<button class="mini-btn play-notes">▶ notes</button>'+
+          '<button class="mini-btn play-with-clip">▶ with clip</button>'+
+          '<button class="mini-btn play-with-default">▶ with default</button>'+
+          '<label class="mini-drop"><input type="file" accept="video/*,audio/*"><span>assign clip</span></label>'+
+          '<button class="mini-btn hardcode-default">📌 lock in default clip</button>'+
+          '<select class="mini-base"></select>'+
+        '</div>'+
+        '<div class="track-status">Uses the default clip.</div>'+
+        '<div class="track-trim"></div>';
+
+      if(tr.likelyMain) row.querySelector('.main-badge').style.display = 'inline-block';
+      row.querySelector('.track-name').textContent = tr.label;
+      row.querySelector('.track-meta').textContent = tr.notes.length+' notes · '+noteName(tr.lowMidi)+'–'+noteName(tr.highMidi);
+      renderMiniRoll(row.querySelector('.miniroll'), tr.notes, dur);
+
+      row.querySelector('.track-enable-checkbox').addEventListener('change', e=>{
+        tr.enabled = e.target.checked;
+        row.classList.toggle('track-disabled', !e.target.checked);
+      });
+
+      const selectEl = row.querySelector('.mini-base');
+      buildNoteOptions(selectEl, 60);
+
+      row.querySelector('.play-notes').addEventListener('click', ()=>previewTrackNotes(tr));
+      row.querySelector('.play-with-clip').addEventListener('click', ()=>previewTrackWithClip(tr));
+      row.querySelector('.play-with-default').addEventListener('click', ()=>previewTrackWithDefaultClip(tr));
+
+      row.querySelector('input[type=file]').addEventListener('change', (e)=>{
+        const file = e.target.files[0];
+        if(!file) return;
+        if(!state.trackClips[tr.index]) state.trackClips[tr.index] = createClipSlot();
+        const slot = state.trackClips[tr.index];
+        const statusEl = row.querySelector('.track-status');
+        const trimEl = row.querySelector('.track-trim');
+        selectEl.style.display = 'inline-block';
+        loadFileIntoSlot(file, slot, statusEl, selectEl, trimEl);
+      });
+
+      row.querySelector('.hardcode-default').addEventListener('click', ()=>{
+        const statusEl = row.querySelector('.track-status');
+        const trimEl = row.querySelector('.track-trim');
+        if(!state.defaultClip.buffer){
+          statusEl.textContent = 'Load a default clip first — nothing to lock in yet.';
+          statusEl.classList.add('err');
+          return;
+        }
+        const slot = cloneClipSlot(state.defaultClip);
+        state.trackClips[tr.index] = slot;
+        selectEl.style.display = 'inline-block';
+        selectEl.value = String(slot.baseNote);
+        statusEl.classList.remove('err');
+        statusEl.innerHTML = 'Locked in a copy of the default clip · '+(slot.buffer?slot.buffer.duration.toFixed(2):'?')+'s — this track now keeps this clip even if the default changes later.';
+        attachTrimUI(trimEl, slot, selectEl, statusEl);
+        refreshButtons();
+      });
+
+      selectEl.addEventListener('change', (e)=>{
+        const slot = state.trackClips[tr.index];
+        if(slot) slot.baseNote = parseInt(e.target.value,10);
+      });
+
+      trackList.appendChild(row);
+    });
+    trackPanel.style.display = state.tracks.length ? 'block' : 'none';
+  }
+
+  midiInput.addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    file.arrayBuffer().then(buf=>{
+      try{
+        state.tracks = parseMidi(buf);
+        state.tracks.forEach(t=> t.enabled = true);
+        state.trackClips = {};
+        state.allNotesFlat = [];
+
+        const melodicTracks = state.tracks.filter(t=>!t.label.includes('Drum Kit'));
+        if(melodicTracks.length){
+          const busiest = melodicTracks.reduce((a,b)=> b.notes.length>a.notes.length?b:a);
+          state.tracks.forEach(t=> t.likelyMain = (t.index===busiest.index));
+        }
+        state.tracks.forEach(tr=>{
+          tr.notes.forEach(n=> state.allNotesFlat.push({ time:n.time, duration:n.duration, midi:n.midi, trackIndex: tr.index }));
+        });
+        state.allNotesFlat.sort((a,b)=>a.time-b.time);
+
+        if(!state.allNotesFlat.length){
+          midiStats.textContent = 'No notes found in that MIDI file.';
+          midiStats.classList.add('err');
+          trackPanel.style.display = 'none';
+          return;
+        }
+        midiStats.classList.remove('err');
+        const dur = computeTotalDuration();
+        const warn = state.allNotesFlat.length > 1500 ? ' (large file — playback may lag)' : '';
+        midiStats.innerHTML = '<b>'+state.allNotesFlat.length+'</b> notes across <b>'+state.tracks.length+'</b> track'+(state.tracks.length===1?'':'s')+' · length <b>'+dur.toFixed(1)+'s</b>'+warn;
+        drawTrackerTicks();
+        renderTrackList();
+        refreshButtons();
+      }catch(err){
+        midiStats.textContent = err.message;
+        midiStats.classList.add('err');
+      }
+    });
+  });
+
+  clipInput.addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    loadFileIntoSlot(file, state.defaultClip, clipStats, baseNoteSelect, document.getElementById('clipTrim'));
+  });
+
+  baseNoteSelect.addEventListener('change', e=>{
+    state.defaultClip.baseNote = parseInt(e.target.value,10);
+  });
+
+  function stopPlayback(){
+    playing = false;
+    if(playbackTimeoutId) clearTimeout(playbackTimeoutId);
+    if(animId) cancelAnimationFrame(animId);
+    scheduledSources.forEach(s=>{ try{ s.stop(); }catch(e){} });
+    scheduledSources = [];
+    (state.gridTracks||[]).forEach(gt=>{
+      if(gt.videoEl){
+        try{ gt.videoEl.pause(); }catch(e){}
+        if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl);
+      }
+    });
+    state.gridTracks = [];
+    playhead.style.left = '0%';
+    stopAdHocPreviews();
+    refreshButtons();
+  }
+
+  function drawGrid(elapsed){
+    const w = canvas.width, h = canvas.height;
+    ctx2d.fillStyle = '#000'; ctx2d.fillRect(0,0,w,h);
+    const gridTracks = state.gridTracks;
+    const n = gridTracks.length;
+    if(n === 0){ requestScanlines(w,h); return; }
+    const cols = Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n/cols);
+    const cellW = w/cols, cellH = h/rows;
+
+    gridTracks.forEach((gt, i)=>{
+      const col = i%cols, row = Math.floor(i/cols);
+      const x = col*cellW, y = row*cellH;
+      ctx2d.save();
+      ctx2d.beginPath();
+      ctx2d.rect(x,y,cellW,cellH);
+      ctx2d.clip();
+      ctx2d.fillStyle = '#0b0b12'; ctx2d.fillRect(x,y,cellW,cellH);
+
+      let drewFrame = false;
+      if(gt.hasVideo && gt.videoEl){
+        if(gt.videoEl.readyState >= 2){
+          try{ gt.frameCtx.drawImage(gt.videoEl, 0, 0, gt.frameCanvas.width, gt.frameCanvas.height); gt.hasCachedFrame = true; }catch(e){}
+        }
+        const reduceStrobe = reduceStrobeToggle.checked;
+        if(reduceStrobe && gt.hasCachedFrame){
+          ctx2d.drawImage(gt.frameCanvas, x, y, cellW, cellH);
+          drewFrame = true;
+        } else if(gt.videoEl.readyState >= 1){
+          ctx2d.drawImage(gt.videoEl, x, y, cellW, cellH);
+          drewFrame = true;
+        } else if(gt.hasCachedFrame){
+          ctx2d.drawImage(gt.frameCanvas, x, y, cellW, cellH);
+          drewFrame = true;
+        }
+      }
+      if(!drewFrame && gt.activeItem){
+        const item = gt.activeItem;
+        const hue = ((item.midi - item.clip.baseNote)*9 + gt.trackIndex*47 + 280) % 360;
+        ctx2d.fillStyle = 'hsl('+hue+',85%,55%)';
+        const bars = 6;
+        for(let b=0;b<bars;b++){
+          const bh = (Math.sin(elapsed*9 + b*1.3 + gt.trackIndex)*0.5+0.5) * cellH*0.5 + cellH*0.15;
+          ctx2d.fillRect(x+b*(cellW/bars)+3, y+cellH-bh, (cellW/bars)-6, bh);
+        }
+      }
+      ctx2d.restore();
+
+      ctx2d.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx2d.font = '700 '+Math.max(10,Math.min(14,cellH*0.09)).toFixed(0)+'px monospace';
+      if(showLabelsToggle.checked) ctx2d.fillText(gt.label.slice(0,20), x+6, y+16);
+      ctx2d.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx2d.strokeRect(x,y,cellW,cellH);
+    });
+
+    requestScanlines(w,h);
+  }
+
+  function requestScanlines(w,h){
+    if(!scanlineToggle.checked) return;
+    ctx2d.fillStyle = 'rgba(0,0,0,0.16)';
+    for(let y=0; y<h; y+=4){ ctx2d.fillRect(0,y,w,1); }
+  }
+
+  function renderLoop(){
+    if(!playing) return;
+    const elapsed = (performance.now() - playbackStartPerf)/1000;
+
+    state.gridTracks.forEach(gt=>{
+      let idx = -1;
+      for(let i=0;i<gt.schedule.length;i++){ if(gt.schedule[i].time - gt.schedule[i].preRoll <= elapsed) idx = i; else break; }
+      if(idx !== gt.cursor && idx >= 0){
+        gt.cursor = idx;
+        const item = gt.schedule[idx];
+        gt.activeItem = item;
+        if(gt.hasVideo && gt.videoEl){
+          try{
+            gt.videoEl.currentTime = item.playOffset;
+            gt.videoEl.playbackRate = Math.min(Math.max(item.rate,0.0625),16);
+            gt.videoEl.play().catch(()=>{});
+          }catch(err){}
+        }
+      }
+    });
+
+    drawGrid(elapsed);
+    playhead.style.left = Math.min(100,(elapsed/totalDuration)*100)+'%';
+    animId = requestAnimationFrame(renderLoop);
+  }
+
+  function computeDurationFor(notesList){
+    if(!notesList.length) return 0;
+    let end = 0;
+    notesList.forEach(n=>{ end = Math.max(end, n.time+n.duration); });
+    return end + 0.4;
+  }
+
+  function startPlayback(record, notesListOverride, forceClip){
+    setupAudioContext();
+    stopPlayback();
+
+    const sourceNotes = notesListOverride || state.allNotesFlat.filter(n=>{
+      const tr = state.tracks.find(t=>t.index===n.trackIndex);
+      return !tr || tr.enabled !== false;
+    });
+    state.scheduleList = sourceNotes
+      .map(n=>{
+        const clip = forceClip || state.trackClips[n.trackIndex] || state.defaultClip;
+        return (clip && clip.buffer) ? { time:n.time, duration:n.duration, midi:n.midi, trackIndex:n.trackIndex, clip } : null;
+      })
+      .filter(Boolean);
+
+    if(!state.scheduleList.length){
+      genStatus.textContent = 'Nothing to play — load a clip (default or for this track) first.';
+      refreshButtons();
+      return null;
+    }
+
+    const anticipateOn = anticipateToggle.checked;
+    const anticipateSeconds = Math.max(0, (parseFloat(anticipateMsInput.value)||0)/1000);
+    const lastTimeByClip = new Map();
+    state.scheduleList.forEach(item=>{
+      const rate = Math.pow(2,(item.midi-item.clip.baseNote)/12);
+      const trimStart = item.clip.startOffset||0;
+      const trimEnd = (item.clip.endOffset==null) ? item.clip.buffer.duration : item.clip.endOffset;
+      const availableFromTrim = Math.max(0, trimEnd-trimStart);
+      const neededSourceTime = item.duration*rate;
+      const normalPlayLen = Math.max(0.01, Math.min(neededSourceTime, availableFromTrim));
+
+      let preRoll = 0;
+      if(anticipateOn && anticipateSeconds > 0){
+        const prevTime = lastTimeByClip.has(item.clip) ? lastTimeByClip.get(item.clip) : -Infinity;
+        const gapBefore = item.time - prevTime;
+        const maxByGap = Math.max(0, gapBefore - 0.01); // small safety margin so it never touches the previous note
+        const maxByBuffer = trimStart / rate; // can't dip further back than the buffer actually has before the trim point
+        preRoll = Math.max(0, Math.min(anticipateSeconds, maxByGap, maxByBuffer));
+      }
+      lastTimeByClip.set(item.clip, item.time);
+
+      item.rate = rate;
+      item.preRoll = preRoll;
+      item.playOffset = Math.max(0, trimStart - preRoll*rate);
+      item.playLen = preRoll*rate + normalPlayLen;
+    });
+
+    const startCtxTime = audioCtx.currentTime + 0.2;
+    const masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.9;
+    masterGain.connect(audioCtx.destination);
+    let mediaDest = null;
+    if(record){ mediaDest = audioCtx.createMediaStreamDestination(); masterGain.connect(mediaDest); }
+
+    scheduledSources = [];
+    state.scheduleList.forEach(item=>{
+      const src = audioCtx.createBufferSource();
+      src.buffer = item.clip.buffer;
+      src.playbackRate.value = item.rate;
+      src.connect(masterGain);
+      try{ src.start(startCtxTime+item.time-item.preRoll, item.playOffset, item.playLen); }catch(e){}
+      scheduledSources.push(src);
+    });
+
+    // One grid tile per track that actually has playable notes, each with its own
+    // video element so simultaneous tracks sharing a clip don't fight over playback state.
+    const seenTracks = new Set();
+    const trackOrder = [];
+    state.scheduleList.forEach(item=>{ if(!seenTracks.has(item.trackIndex)){ seenTracks.add(item.trackIndex); trackOrder.push(item.trackIndex); } });
+
+    state.gridTracks = trackOrder.map(ti=>{
+      const trackMeta = state.tracks.find(t=>t.index===ti);
+      const schedule = state.scheduleList.filter(it=>it.trackIndex===ti);
+      const clip = schedule[0].clip;
+      let videoEl = null, hasVideo = false, frameCanvas = null, frameCtx = null;
+      if(clip.hasVideo && clip.videoURL){
+        videoEl = document.createElement('video');
+        videoEl.muted = true; videoEl.playsInline = true; videoEl.style.display = 'none';
+        videoEl.src = clip.videoURL;
+        document.body.appendChild(videoEl);
+        hasVideo = true;
+        frameCanvas = document.createElement('canvas');
+        frameCanvas.width = 320; frameCanvas.height = 180;
+        frameCtx = frameCanvas.getContext('2d');
+      }
+      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, frameCanvas, frameCtx, hasCachedFrame:false };
+    });
+
+    playing = true;
+    playbackStartPerf = performance.now();
+    totalDuration = computeDurationFor(sourceNotes);
+    refreshButtons();
+    requestAnimationFrame(renderLoop);
+    playbackTimeoutId = setTimeout(()=>{ stopPlayback(); }, totalDuration*1000 + 300);
+    return mediaDest;
+  }
+
+  btnPreview.addEventListener('click', ()=>{
+    genStatus.textContent = 'Playing preview…';
+    startPlayback(false);
+  });
+
+  btnStop.addEventListener('click', ()=>{
+    stopPlayback();
+    genStatus.textContent = 'Stopped.';
+    if(window.__currentRecorder && window.__currentRecorder.state === 'recording') window.__currentRecorder.stop();
+  });
+
+  btnRecord.addEventListener('click', ()=>{
+    downloadLink.classList.add('hidden');
+    genStatus.textContent = 'Recording — keep this tab visible…';
+    const mediaDest = startPlayback(true);
+    let canvasStream;
+    try{ canvasStream = canvas.captureStream(30); }
+    catch(err){ genStatus.textContent = "This browser won't let me capture the canvas for recording."; return; }
+    const combined = new MediaStream([...canvasStream.getVideoTracks(), ...mediaDest.stream.getAudioTracks()]);
+    let mimeType = 'video/webm;codecs=vp9,opus';
+    if(!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'video/webm';
+    const recorder = new MediaRecorder(combined, {mimeType});
+    const chunks = [];
+    recorder.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
+    recorder.onstop = ()=>{
+      const blob = new Blob(chunks, {type:mimeType});
+      downloadLink.href = URL.createObjectURL(blob);
+      downloadLink.classList.remove('hidden');
+      genStatus.textContent = 'Done — your file is ready below.';
+    };
+    recorder.start();
+    window.__currentRecorder = recorder;
+    setTimeout(()=>{ if(recorder.state === 'recording') recorder.stop(); }, totalDuration*1000 + 500);
+  });
+
+  // ---------- Proper (offline, frame-accurate) export ----------
+  function buildExportSchedule(){
+    const sourceNotes = state.allNotesFlat.filter(n=>{
+      const tr = state.tracks.find(t=>t.index===n.trackIndex);
+      return !tr || tr.enabled !== false;
+    });
+    const anticipateOn = anticipateToggle.checked;
+    const anticipateSeconds = Math.max(0, (parseFloat(anticipateMsInput.value)||0)/1000);
+
+    const scheduleList = sourceNotes.map(n=>{
+      const clip = state.trackClips[n.trackIndex] || state.defaultClip;
+      return (clip && clip.buffer) ? { time:n.time, duration:n.duration, midi:n.midi, trackIndex:n.trackIndex, clip } : null;
+    }).filter(Boolean);
+
+    const lastTimeByClip = new Map();
+    scheduleList.forEach(item=>{
+      const rate = Math.pow(2,(item.midi-item.clip.baseNote)/12);
+      const trimStart = item.clip.startOffset||0;
+      const trimEnd = (item.clip.endOffset==null) ? item.clip.buffer.duration : item.clip.endOffset;
+      const availableFromTrim = Math.max(0, trimEnd-trimStart);
+      const neededSourceTime = item.duration*rate;
+      const normalPlayLen = Math.max(0.01, Math.min(neededSourceTime, availableFromTrim));
+      let preRoll = 0;
+      if(anticipateOn && anticipateSeconds > 0){
+        const prevTime = lastTimeByClip.has(item.clip) ? lastTimeByClip.get(item.clip) : -Infinity;
+        const gapBefore = item.time - prevTime;
+        const maxByGap = Math.max(0, gapBefore-0.01);
+        const maxByBuffer = trimStart/rate;
+        preRoll = Math.max(0, Math.min(anticipateSeconds, maxByGap, maxByBuffer));
+      }
+      lastTimeByClip.set(item.clip, item.time);
+      item.rate = rate; item.preRoll = preRoll;
+      item.playOffset = Math.max(0, trimStart-preRoll*rate);
+      item.playLen = preRoll*rate + normalPlayLen;
+    });
+
+    const totalDuration = computeDurationFor(sourceNotes);
+    const seen = new Set(); const order = [];
+    scheduleList.forEach(it=>{ if(!seen.has(it.trackIndex)){ seen.add(it.trackIndex); order.push(it.trackIndex); } });
+    const gridTrackDefs = order.map(ti=>{
+      const trackMeta = state.tracks.find(t=>t.index===ti);
+      const schedule = scheduleList.filter(it=>it.trackIndex===ti);
+      const clip = schedule[0].clip;
+      let videoEl = null, hasVideo = false;
+      if(clip.hasVideo && clip.videoURL){
+        videoEl = document.createElement('video');
+        videoEl.muted = true; videoEl.playsInline = true; videoEl.style.display = 'none';
+        videoEl.src = clip.videoURL;
+        document.body.appendChild(videoEl);
+        hasVideo = true;
+      }
+      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo };
+    });
+
+    return { scheduleList, totalDuration, gridTrackDefs };
+  }
+
+  async function renderAudioOffline(scheduleList, totalDuration, sampleRate){
+    const offlineCtx = new OfflineAudioContext(2, Math.max(1, Math.ceil(totalDuration*sampleRate)), sampleRate);
+    const masterGain = offlineCtx.createGain();
+    masterGain.gain.value = 0.9;
+    masterGain.connect(offlineCtx.destination);
+    scheduleList.forEach(item=>{
+      const src = offlineCtx.createBufferSource();
+      src.buffer = item.clip.buffer;
+      src.playbackRate.value = item.rate;
+      src.connect(masterGain);
+      const startTime = Math.max(0, item.time-item.preRoll);
+      try{ src.start(startTime, item.playOffset, item.playLen); }catch(e){}
+    });
+    return await offlineCtx.startRendering();
+  }
+
+  async function encodeAudioOffline(audioBuffer, audioEncoder){
+    const sampleRate = audioBuffer.sampleRate;
+    const channels = audioBuffer.numberOfChannels;
+    const chunkSamples = 4096;
+    const totalSamples = audioBuffer.length;
+    const channelData = [];
+    for(let c=0;c<channels;c++) channelData.push(audioBuffer.getChannelData(c));
+
+    for(let offset=0; offset<totalSamples; offset+=chunkSamples){
+      const len = Math.min(chunkSamples, totalSamples-offset);
+      const planar = new Float32Array(len*channels);
+      for(let c=0;c<channels;c++){ planar.set(channelData[c].subarray(offset, offset+len), c*len); }
+      const audioData = new AudioData({
+        format: 'f32-planar',
+        sampleRate,
+        numberOfFrames: len,
+        numberOfChannels: channels,
+        timestamp: Math.round((offset/sampleRate)*1e6),
+        data: planar
+      });
+      audioEncoder.encode(audioData);
+      audioData.close();
+      if((offset/chunkSamples) % 40 === 0) await new Promise(r=>setTimeout(r,0));
+    }
+    await audioEncoder.flush();
+  }
+
+  function seekAndWait(videoEl, t){
+    return new Promise(resolve=>{
+      let done = false;
+      function onSeeked(){ if(done) return; done=true; videoEl.removeEventListener('seeked', onSeeked); resolve(); }
+      videoEl.addEventListener('seeked', onSeeked);
+      try{ videoEl.currentTime = t; }catch(e){ resolve(); return; }
+      setTimeout(()=>{ if(!done){ done=true; videoEl.removeEventListener('seeked', onSeeked); resolve(); } }, 1500);
+    });
+  }
+
+  async function renderVideoFramesOffline({ gridTrackDefs, totalDuration, fps, width, height, videoEncoder, onProgress, isCancelled }){
+    const frameCount = Math.max(1, Math.round(totalDuration*fps));
+    const offCanvas = document.createElement('canvas');
+    offCanvas.width = width; offCanvas.height = height;
+    const octx = offCanvas.getContext('2d', { willReadFrequently:true });
+
+    const n = gridTrackDefs.length;
+    const cols = n ? Math.ceil(Math.sqrt(n)) : 1;
+    const rows = n ? Math.ceil(n/cols) : 1;
+    const cellW = width/cols, cellH = height/rows;
+
+    for(let f=0; f<frameCount; f++){
+      if(isCancelled()) throw new Error('cancelled');
+      const elapsed = f/fps;
+
+      for(const gt of gridTrackDefs){
+        let idx = -1;
+        for(let i=0;i<gt.schedule.length;i++){ if(gt.schedule[i].time-gt.schedule[i].preRoll <= elapsed) idx=i; else break; }
+        if(idx>=0){
+          gt.cursor = idx;
+          gt.activeItem = gt.schedule[idx];
+          if(gt.hasVideo){
+            const item = gt.activeItem;
+            const localT = item.playOffset + Math.max(0, elapsed-(item.time-item.preRoll))*item.rate;
+            await seekAndWait(gt.videoEl, localT);
+          }
+        }
+      }
+
+      octx.fillStyle = '#000'; octx.fillRect(0,0,width,height);
+      gridTrackDefs.forEach((gt,i)=>{
+        const col = i%cols, row = Math.floor(i/cols);
+        const x = col*cellW, y = row*cellH;
+        octx.save(); octx.beginPath(); octx.rect(x,y,cellW,cellH); octx.clip();
+        octx.fillStyle = '#0b0b12'; octx.fillRect(x,y,cellW,cellH);
+        if(gt.hasVideo && gt.videoEl.readyState >= 2){
+          octx.drawImage(gt.videoEl, x, y, cellW, cellH);
+        } else if(gt.activeItem){
+          const item = gt.activeItem;
+          const hue = ((item.midi - item.clip.baseNote)*9 + gt.trackIndex*47 + 280) % 360;
+          octx.fillStyle = 'hsl('+hue+',85%,55%)';
+          const bars = 6;
+          for(let b=0;b<bars;b++){
+            const bh = (Math.sin(elapsed*9 + b*1.3 + gt.trackIndex)*0.5+0.5) * cellH*0.5 + cellH*0.15;
+            octx.fillRect(x+b*(cellW/bars)+3, y+cellH-bh, (cellW/bars)-6, bh);
+          }
+        }
+        octx.restore();
+        if(showLabelsToggle.checked){
+          octx.fillStyle = 'rgba(255,255,255,0.75)';
+          octx.font = '700 '+Math.max(10,Math.min(14,cellH*0.09)).toFixed(0)+'px monospace';
+          octx.fillText(gt.label.slice(0,20), x+6, y+16);
+        }
+        octx.strokeStyle = 'rgba(255,255,255,0.1)';
+        octx.strokeRect(x,y,cellW,cellH);
+      });
+      if(scanlineToggle.checked){
+        octx.fillStyle = 'rgba(0,0,0,0.16)';
+        for(let yy=0; yy<height; yy+=4){ octx.fillRect(0,yy,width,1); }
+      }
+
+      const frame = new VideoFrame(offCanvas, { timestamp: Math.round((f/fps)*1e6) });
+      try{ videoEncoder.encode(frame, { keyFrame: f % (fps*2) === 0 }); } finally { frame.close(); }
+
+      onProgress(f+1, frameCount);
+      if(f % 5 === 0) await new Promise(r=>setTimeout(r,0));
+    }
+    await videoEncoder.flush();
+
+    gridTrackDefs.forEach(gt=>{
+      if(gt.videoEl){
+        try{ gt.videoEl.pause(); }catch(e){}
+        if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl);
+      }
+    });
+  }
+
+  async function runProperExport(){
+    if(!('VideoEncoder' in window) || !('AudioEncoder' in window)){
+      exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, or Firefox 130+ — otherwise use 'Record & download' above instead.";
+      exportProgress.classList.add('err');
+      return;
+    }
+    if(!state.allNotesFlat.length || !state.defaultClip.buffer){
+      exportProgress.textContent = 'Load a MIDI file and a clip first.';
+      return;
+    }
+
+    stopPlayback();
+    exportCancelled = false;
+    exporting = true;
+    btnProperExport.disabled = true;
+    btnCancelExport.disabled = false;
+    properDownloadLink.classList.add('hidden');
+    exportProgress.classList.remove('err');
+    exportProgress.textContent = 'Starting export…';
+
+    let gridTrackDefsForCleanup = null;
+    try{
+      const muxerModule = await import('https://cdn.jsdelivr.net/npm/webm-muxer@latest/build/webm-muxer.mjs');
+      const { Muxer, ArrayBufferTarget } = muxerModule;
+
+      const [width, height] = resolutionSelect.value.split('x').map(Number);
+      const fps = parseInt(exportFpsSelect.value, 10) || 30;
+
+      setupAudioContext();
+      const { scheduleList, totalDuration, gridTrackDefs } = buildExportSchedule();
+      gridTrackDefsForCleanup = gridTrackDefs;
+      if(!scheduleList.length){
+        exportProgress.textContent = 'Nothing to export — check your clip assignments.';
+        return;
+      }
+
+      exportProgress.textContent = 'Rendering audio (offline, sample-accurate)…';
+      const audioBuffer = await renderAudioOffline(scheduleList, totalDuration, 48000);
+
+      const muxer = new Muxer({
+        target: new ArrayBufferTarget(),
+        video: { codec:'V_VP9', width, height, frameRate: fps },
+        audio: { codec:'A_OPUS', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: 48000 }
+      });
+
+      const videoEncoder = new VideoEncoder({
+        output: (chunk, meta)=> muxer.addVideoChunk(chunk, meta),
+        error: e=> console.error('video encoder error', e)
+      });
+      videoEncoder.configure({
+        codec: 'vp09.00.10.08',
+        width, height,
+        framerate: fps,
+        bitrate: Math.min(60_000_000, Math.max(4_000_000, Math.round(width*height*fps*0.02)))
+      });
+
+      const audioEncoder = new AudioEncoder({
+        output: (chunk, meta)=> muxer.addAudioChunk(chunk, meta),
+        error: e=> console.error('audio encoder error', e)
+      });
+      audioEncoder.configure({ codec:'opus', sampleRate:48000, numberOfChannels: audioBuffer.numberOfChannels, bitrate:160000 });
+
+      exportProgress.textContent = 'Encoding audio…';
+      await encodeAudioOffline(audioBuffer, audioEncoder);
+
+      exportProgress.textContent = 'Rendering video frame 0 — this can take a while, especially at high resolution/fps…';
+      await renderVideoFramesOffline({
+        gridTrackDefs, totalDuration, fps, width, height, videoEncoder,
+        onProgress: (done,total)=>{ exportProgress.textContent = 'Rendering frame '+done+' / '+total+'…'; },
+        isCancelled: ()=> exportCancelled
+      });
+
+      muxer.finalize();
+      const { buffer } = muxer.target;
+      const blob = new Blob([buffer], { type:'video/webm' });
+      properDownloadLink.href = URL.createObjectURL(blob);
+      properDownloadLink.classList.remove('hidden');
+      exportProgress.textContent = 'Done — proper export ready below.';
+    }catch(err){
+      if(err && err.message === 'cancelled'){
+        exportProgress.textContent = 'Export cancelled.';
+      } else {
+        console.error(err);
+        exportProgress.textContent = 'Export failed: '+(err && err.message ? err.message : 'unknown error')+" — your browser or this clip/codec combo may not be supported. 'Record & download' above still works as a fallback.";
+        exportProgress.classList.add('err');
+      }
+      if(gridTrackDefsForCleanup){
+        gridTrackDefsForCleanup.forEach(gt=>{
+          if(gt.videoEl){ try{ gt.videoEl.pause(); }catch(e){} if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl); }
+        });
+      }
+    } finally {
+      exporting = false;
+      btnCancelExport.disabled = true;
+      refreshButtons();
+    }
+  }
+
+  btnProperExport.addEventListener('click', ()=>{ runProperExport(); });
+  btnCancelExport.addEventListener('click', ()=>{ exportCancelled = true; });
+
+  window.addEventListener('beforeunload', (e)=>{
+    const hasWork = state.allNotesFlat.length > 0 || !!state.defaultClip.buffer;
+    if(hasWork){
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+
+  refreshButtons();
+})();
+</script>
+</body>
+</html>
