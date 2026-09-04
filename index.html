@@ -4,12 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>YTPMV MAKER</title>
-<link rel="apple-touch-icon" sizes="180x180" href="public/apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="48x48" href="public/favicon-48x48.png">
-<link rel="icon" type="image/png" sizes="32x32" href="public/favicon-32x32.png">
-<link rel="icon" type="image/png" sizes="16x16" href="public/favicon-16x16.png">
-<link rel="shortcut icon" href="public/favicon.ico">
-<link rel="manifest" href="public/site.webmanifest">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Mono:wght@400;700&display=swap');
 
@@ -78,6 +72,8 @@
 
   .track-row{ border: 1px solid var(--panel-line); border-radius: 4px; padding: 12px; margin-bottom: 10px; background: #100e18; }
   .track-row.track-disabled{ opacity: 0.45; }
+  .track-row.track-has-clip{ background: #1e1b30; border-color: var(--cyan); }
+  .track-clip-badge{ font-size:10px; color: var(--bg); background: var(--cyan); padding:2px 6px; border-radius:2px; font-weight:700; letter-spacing:0.5px; margin-left:8px; }
   .track-enable-checkbox{ width:auto; margin-right:8px; flex-shrink:0; }
   .track-head{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; }
   .track-name{ font-weight:700; color: var(--text); font-size:13px; }
@@ -106,10 +102,44 @@
 <body>
 <div class="wrap">
 
+  <div id="resumeBanner" style="display:none; background:#1e1b30; border:1px solid var(--cyan); border-radius:4px; padding:12px 16px; margin-bottom:16px; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+    <span id="resumeBannerText" style="font-size:12px; color:var(--text);"></span>
+    <span style="display:flex; gap:8px; flex-shrink:0;">
+      <button class="mini-btn" id="resumeBtn">Resume project</button>
+      <button class="mini-btn" id="discardBtn">Discard</button>
+    </span>
+  </div>
+
   <header>
     <h1>YTPMV MAKER</h1>
     <div class="sub">Drop a MIDI file and a clip. Every note re-pitches a clip and drives the picture — give every instrument its own clip, or leave it as one clip for the lot.</div>
   </header>
+
+  <div class="panel">
+    <h2>00 — Project</h2>
+    <div class="stat-line" style="margin-top:0;">
+      Saves your MIDI, trim points, pitch, volumes and settings as a small project file — like a video editor's project, it remembers your clips by filename rather than copying the media itself. Keep it next to your original clip files.
+    </div>
+    <div class="controls">
+      <button class="action btn-stop" id="btnSaveProject">💾 Save project file</button>
+      <label class="action btn-stop" style="cursor:pointer; display:inline-flex; align-items:center; justify-content:center;">
+        📂 Load project file
+        <input type="file" id="loadProjectInput" accept=".json" style="display:none;">
+      </label>
+    </div>
+  </div>
+
+  <div class="panel" id="relinkPanel" style="display:none;">
+    <h2>Relink clips</h2>
+    <div class="stat-line" style="margin-top:0;">This project references clips by filename. Pick the original file(s) again (they don't need to be renamed) and it'll match them back to the right slot automatically.</div>
+    <div id="relinkList" class="stat-line"></div>
+    <div class="controls">
+      <label class="mini-drop" style="padding:12px 16px;">
+        choose clip file(s) to relink
+        <input type="file" id="relinkInput" accept="video/*,audio/*" multiple>
+      </label>
+    </div>
+  </div>
 
   <div class="grid">
     <div class="panel">
@@ -220,6 +250,8 @@
     Playback speed and pitch move together per note — that pitch/speed link is the classic YTPMV chipmunk sound, not a bug.
     Recording captures the canvas + audio live, so keep this tab in the foreground while it runs.
     Pitch detection is a rough guess from autocorrelation, not a tuner — always sanity-check the base note.
+    Every clip is auto-leveled to a consistent peak on load, and a limiter sits on the master bus so stacked notes won't distort — the volume sliders and the "level auto-matched" note in a clip's status are stacked on top of that, not instead of it.
+    Your edit decisions (trims, pitch, volumes, settings, and the MIDI itself) auto-save to this browser as you work — the clip files themselves are never copied, only remembered by name, so after a crash or closed tab you'll resume and relink your clips rather than losing everything. <a href="#" id="clearSavedProjectLink" style="color:var(--muted); text-decoration:underline;">Clear the saved project</a> if you'd rather start clean.
   </footer>
 
 </div>
@@ -297,6 +329,16 @@
   const btnCancelExport = document.getElementById('btnCancelExport');
   const exportFpsSelect = document.getElementById('exportFpsSelect');
   const exportProgress = document.getElementById('exportProgress');
+  const btnSaveProject = document.getElementById('btnSaveProject');
+  const loadProjectInput = document.getElementById('loadProjectInput');
+  const relinkPanel = document.getElementById('relinkPanel');
+  const relinkList = document.getElementById('relinkList');
+  const relinkInput = document.getElementById('relinkInput');
+  const resumeBanner = document.getElementById('resumeBanner');
+  const resumeBannerText = document.getElementById('resumeBannerText');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const discardBtn = document.getElementById('discardBtn');
+  const clearSavedProjectLink = document.getElementById('clearSavedProjectLink');
   const properDownloadLink = document.getElementById('properDownloadLink');
   const baseNoteSelect = document.getElementById('baseNote');
   const anticipateToggle = document.getElementById('anticipateToggle');
@@ -310,10 +352,35 @@
     const [w,h] = resolutionSelect.value.split('x').map(Number);
     canvas.width = w;
     canvas.height = h;
+    scheduleSaveProject();
   });
   anticipateToggle.addEventListener('change', ()=>{
     anticipateAmountRow.style.display = anticipateToggle.checked ? 'block' : 'none';
+    scheduleSaveProject();
   });
+  anticipateMsInput.addEventListener('change', ()=> scheduleSaveProject());
+  showLabelsToggle.addEventListener('change', ()=> scheduleSaveProject());
+  reduceStrobeToggle.addEventListener('change', ()=> scheduleSaveProject());
+  scanlineToggle.addEventListener('change', ()=> scheduleSaveProject());
+
+  // Backspace/Delete resets whichever "Make it" control is currently focused back to its default.
+  function resetOnBackspace(el, applyDefault){
+    el.addEventListener('keydown', e=>{
+      if(e.key === 'Backspace' || e.key === 'Delete'){
+        e.preventDefault();
+        applyDefault();
+        el.dispatchEvent(new Event('change'));
+      }
+    });
+  }
+  resetOnBackspace(anticipateToggle, ()=>{ anticipateToggle.checked = false; });
+  resetOnBackspace(anticipateMsInput, ()=>{ anticipateMsInput.value = '80'; });
+  resetOnBackspace(showLabelsToggle, ()=>{ showLabelsToggle.checked = true; });
+  resetOnBackspace(reduceStrobeToggle, ()=>{ reduceStrobeToggle.checked = true; });
+  resetOnBackspace(scanlineToggle, ()=>{ scanlineToggle.checked = true; });
+  resetOnBackspace(resolutionSelect, ()=>{ resolutionSelect.value = '960x540'; });
+  resetOnBackspace(exportFpsSelect, ()=>{ exportFpsSelect.value = '30'; });
+
   const trackPanel = document.getElementById('trackPanel');
   const trackList = document.getElementById('trackList');
   document.getElementById('selectAllTracks').addEventListener('click', ()=>{
@@ -322,6 +389,7 @@
       cb.checked = true;
       cb.closest('.track-row').classList.remove('track-disabled');
     });
+    scheduleSaveProject();
   });
   document.getElementById('selectNoneTracks').addEventListener('click', ()=>{
     state.tracks.forEach(t=> t.enabled = false);
@@ -329,6 +397,7 @@
       cb.checked = false;
       cb.closest('.track-row').classList.add('track-disabled');
     });
+    scheduleSaveProject();
   });
 
   buildNoteOptions(baseNoteSelect, 60);
@@ -529,12 +598,12 @@
     const v = document.createElement('video');
     v.muted = true; v.playsInline = true; v.style.display='none';
     document.body.appendChild(v);
-    return { videoEl: v, buffer:null, hasVideo:false, baseNote:60, startOffset:0, endOffset:null, videoURL:null };
+    return { videoEl: v, buffer:null, hasVideo:false, baseNote:60, startOffset:0, endOffset:null, videoURL:null, normGain:1 };
   }
 
-  // Copies another slot's current buffer/video/trim/pitch into a brand new, independent
-  // slot — used to "lock in" the default clip onto a track so later changes to the
-  // default don't silently change that track too.
+  // Copies another slot's current buffer/video/trim/pitch/level into a brand new,
+  // independent slot — used to "lock in" the default clip onto a track so later
+  // changes to the default don't silently change that track too.
   function cloneClipSlot(source){
     const slot = createClipSlot();
     slot.buffer = source.buffer;
@@ -543,8 +612,29 @@
     slot.startOffset = source.startOffset;
     slot.endOffset = source.endOffset;
     slot.videoURL = source.videoURL;
+    slot.normGain = source.normGain;
+    slot.fileName = source.fileName;
+    slot.fileSize = source.fileSize;
+    slot.fileLastModified = source.fileLastModified;
     if(source.videoURL) slot.videoEl.src = source.videoURL;
     return slot;
+  }
+
+  // Scans the whole decoded buffer for its peak sample and returns a gain that would
+  // bring that peak up (or down) to a consistent target level. Capped so we don't
+  // wildly amplify the noise floor of a near-silent recording.
+  function computePeakNormGain(buffer){
+    let peak = 0;
+    for(let c=0; c<buffer.numberOfChannels; c++){
+      const data = buffer.getChannelData(c);
+      for(let i=0; i<data.length; i++){
+        const a = Math.abs(data[i]);
+        if(a > peak) peak = a;
+      }
+    }
+    if(peak < 1e-4) return 1;
+    const target = 0.9;
+    return Math.min(target/peak, 8);
   }
 
   function drawWaveform(canvasEl, buffer, viewStart, viewEnd){
@@ -694,6 +784,12 @@
       redraw();
       return true;
     }
+    function resetTrimToDefault(){
+      pushHistory();
+      slot.startOffset = 0;
+      slot.endOffset = buffer.duration;
+      redraw();
+    }
 
     let recheckTimer = null;
     function scheduleAutoRecheck(){
@@ -723,6 +819,7 @@
       startInput.value = (slot.startOffset||0).toFixed(3);
       endInput.value = slot.endOffset.toFixed(3);
       scheduleAutoRecheck();
+      scheduleSaveProject();
     }
     redraw();
 
@@ -771,7 +868,7 @@
     }, { passive:false });
     canvasEl.addEventListener('dblclick', ()=>{ slot.viewStart = 0; slot.viewEnd = buffer.duration; redraw(); });
 
-    canvasEl.addEventListener('mouseenter', ()=>{ hoveredTrimCtx = { slot, buffer, redraw, pushHistory, undoTrim, redoTrim }; });
+    canvasEl.addEventListener('mouseenter', ()=>{ hoveredTrimCtx = { slot, buffer, redraw, pushHistory, undoTrim, redoTrim, resetTrimToDefault }; });
     canvasEl.addEventListener('mouseleave', ()=>{ if(hoveredTrimCtx && hoveredTrimCtx.slot===slot) hoveredTrimCtx = null; });
 
     wrap.querySelector('.auto-trim').addEventListener('click', ()=>{
@@ -846,11 +943,14 @@
     });
   }
 
-  function loadFileIntoSlot(file, slot, statusEl, selectEl, trimEl){
+  function loadFileIntoSlot(file, slot, statusEl, selectEl, trimEl, onDone){
     setupAudioContext();
     statusEl.classList.remove('err');
     statusEl.textContent = 'Reading clip…';
     slot.buffer = null; slot.hasVideo = false; slot.startOffset = 0; slot.endOffset = null;
+    slot.fileName = file.name || null;
+    slot.fileSize = file.size || null;
+    slot.fileLastModified = file.lastModified || null;
     if(trimEl) trimEl.innerHTML = '';
 
     const url = URL.createObjectURL(file);
@@ -861,6 +961,7 @@
     file.arrayBuffer().then(buf=>{
       audioCtx.decodeAudioData(buf.slice(0)).then(decoded=>{
         slot.buffer = decoded;
+        slot.normGain = computePeakNormGain(decoded);
         videoProbe.then(probe=>{
           slot.hasVideo = probe.hasVideo;
           const result = detectPitch(decoded);
@@ -877,25 +978,239 @@
             slot.endOffset = guess.end;
             trimNote = ' · auto-trimmed (hit "reset trim" below if you don\'t want that)';
           }
+          const levelNote = ' · level auto-matched ('+(slot.normGain>=1?'+':'')+(20*Math.log10(slot.normGain)).toFixed(1)+'dB)';
           if(result && result.confidence > 0.35){
             const clamped = Math.max(24, Math.min(96, result.midi));
             slot.baseNote = clamped;
             selectEl.value = String(clamped);
             const word = result.confidence > 0.6 ? 'sounds like' : 'rough guess —';
-            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · '+word+' <b>'+noteName(result.midi)+'</b> ('+result.freq.toFixed(0)+'Hz, '+Math.round(result.confidence*100)+'% confident)'+visualNote+trimNote;
+            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · '+word+' <b>'+noteName(result.midi)+'</b> ('+result.freq.toFixed(0)+'Hz, '+Math.round(result.confidence*100)+'% confident)'+visualNote+trimNote+levelNote;
           } else {
-            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · sounds percussive (more of a hit or slap than a clear note) — pitch-shifting will still run, just won\'t sound like a melody'+visualNote+trimNote;
+            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · sounds percussive (more of a hit or slap than a clear note) — pitch-shifting will still run, just won\'t sound like a melody'+visualNote+trimNote+levelNote;
           }
           if(probe.failed) statusEl.classList.add('err');
           if(trimEl) attachTrimUI(trimEl, slot, selectEl, statusEl);
           refreshButtons();
+          scheduleSaveProject();
+          if(onDone) onDone(true);
         });
       }).catch(()=>{
         statusEl.textContent = "Couldn't read audio from that file. Try a plain audio file (mp3/wav) or a standard mp4/webm video.";
         statusEl.classList.add('err');
+        if(onDone) onDone(false);
       });
     });
   }
+
+
+  // ---------- Project file (Premiere-style: remembers filenames + edit decisions, never copies the media itself) ----------
+  const META_KEY = 'ytpmv_project_meta_v1';
+
+  function arrayBufferToBase64(buf){
+    let binary = '';
+    const bytes = new Uint8Array(buf);
+    const chunk = 0x8000;
+    for(let i=0; i<bytes.length; i+=chunk){
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+    }
+    return btoa(binary);
+  }
+  function base64ToArrayBuffer(b64){
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for(let i=0; i<binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  function clipRef(slot){
+    if(!slot || !slot.buffer) return null;
+    return {
+      fileName: slot.fileName || null,
+      fileSize: slot.fileSize || null,
+      fileLastModified: slot.fileLastModified || null,
+      baseNote: slot.baseNote,
+      startOffset: slot.startOffset,
+      endOffset: slot.endOffset,
+      normGain: slot.normGain
+    };
+  }
+
+  async function gatherProjectMeta(){
+    let midiBase64 = null;
+    if(state.midiArrayBuffer){
+      try{ midiBase64 = arrayBufferToBase64(state.midiArrayBuffer); }catch(e){}
+    }
+    const trackClips = {};
+    Object.keys(state.trackClips).forEach(k=>{
+      const ref = clipRef(state.trackClips[k]);
+      if(ref) trackClips[k] = ref;
+    });
+    return {
+      version: 1,
+      midiBase64,
+      defaultClip: clipRef(state.defaultClip),
+      trackClips,
+      tracks: state.tracks.map(t=>({ index:t.index, enabled:t.enabled, volume:t.volume })),
+      settings: {
+        anticipate: anticipateToggle.checked,
+        anticipateMs: anticipateMsInput.value,
+        showLabels: showLabelsToggle.checked,
+        reduceStrobe: reduceStrobeToggle.checked,
+        scanline: scanlineToggle.checked,
+        resolution: resolutionSelect.value,
+        exportFps: exportFpsSelect.value
+      },
+      savedAt: Date.now()
+    };
+  }
+
+  let saveMetaTimer = null;
+  function scheduleSaveProject(){
+    clearTimeout(saveMetaTimer);
+    saveMetaTimer = setTimeout(async ()=>{
+      try{ localStorage.setItem(META_KEY, JSON.stringify(await gatherProjectMeta())); }
+      catch(e){ console.warn('Could not save project metadata (it may be too large for localStorage — MIDI files over a few MB can hit this):', e); }
+    }, 600);
+  }
+
+  function clearSavedProject(){
+    try{ localStorage.removeItem(META_KEY); }catch(e){}
+  }
+
+  async function downloadProjectFile(){
+    const meta = await gatherProjectMeta();
+    const blob = new Blob([JSON.stringify(meta)], { type:'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'ytpmv-project.json';
+    a.click();
+  }
+
+  // Applies a loaded project's metadata: restores the (embedded) MIDI immediately, then
+  // shows a relink prompt for any clips so the person can re-point at their original files —
+  // matched automatically by filename + size where possible, same idea as relinking media
+  // in a video editor.
+  async function applyProjectMeta(meta){
+    try{
+      if(meta.midiBase64){
+        const buf = base64ToArrayBuffer(meta.midiBase64);
+        state.midiArrayBuffer = buf;
+        state.tracks = parseMidi(buf);
+        state.tracks.forEach(t=>{
+          const saved = (meta.tracks||[]).find(s=>s.index===t.index);
+          t.enabled = saved ? saved.enabled !== false : true;
+          t.volume = (saved && saved.volume!=null) ? saved.volume : 1;
+        });
+        const melodicTracks = state.tracks.filter(t=>!t.label.includes('Drum Kit'));
+        if(melodicTracks.length){
+          const busiest = melodicTracks.reduce((a,b)=> b.notes.length>a.notes.length?b:a);
+          state.tracks.forEach(t=> t.likelyMain = (t.index===busiest.index));
+        }
+        state.trackClips = {};
+        state.allNotesFlat = [];
+        state.tracks.forEach(tr=> tr.notes.forEach(n=> state.allNotesFlat.push({ time:n.time, duration:n.duration, midi:n.midi, trackIndex:tr.index })));
+        state.allNotesFlat.sort((a,b)=>a.time-b.time);
+        const dur = computeTotalDuration();
+        midiStats.innerHTML = '<b>'+state.allNotesFlat.length+'</b> notes across <b>'+state.tracks.length+'</b> track'+(state.tracks.length===1?'':'s')+' · length <b>'+dur.toFixed(1)+'s</b> · restored from your project file';
+        drawTrackerTicks();
+        renderTrackList();
+      }
+      if(meta.settings){
+        anticipateToggle.checked = !!meta.settings.anticipate;
+        anticipateAmountRow.style.display = anticipateToggle.checked ? 'block' : 'none';
+        if(meta.settings.anticipateMs!=null) anticipateMsInput.value = meta.settings.anticipateMs;
+        showLabelsToggle.checked = meta.settings.showLabels !== false;
+        reduceStrobeToggle.checked = meta.settings.reduceStrobe !== false;
+        scanlineToggle.checked = meta.settings.scanline !== false;
+        if(meta.settings.resolution){
+          resolutionSelect.value = meta.settings.resolution;
+          const parts = meta.settings.resolution.split('x').map(Number);
+          canvas.width = parts[0]; canvas.height = parts[1];
+        }
+        if(meta.settings.exportFps) exportFpsSelect.value = meta.settings.exportFps;
+      }
+      refreshButtons();
+      showRelinkPrompt(meta);
+      genStatus.textContent = meta.midiBase64 ? 'Project loaded — now relink your clips below.' : 'Project loaded.';
+    }catch(err){
+      console.error(err);
+      genStatus.textContent = "Couldn't load that project file — it may be corrupted or from a newer version.";
+    }
+  }
+
+  // Builds a small pending-relink list from the project's clip references, and shows a
+  // file picker the person can drop their original clips into — matched back to the
+  // right slot by filename + size, same as any editor's "locate media" flow.
+  function showRelinkPrompt(meta){
+    const pending = [];
+    if(meta.defaultClip && meta.defaultClip.fileName) pending.push({ kind:'default', ref: meta.defaultClip });
+    Object.keys(meta.trackClips||{}).forEach(idx=>{
+      const ref = meta.trackClips[idx];
+      if(ref && ref.fileName) pending.push({ kind:'track', trackIndex: parseInt(idx,10), ref });
+    });
+    if(!pending.length) return;
+
+    relinkList.innerHTML = pending.map(p=>{
+      const label = p.kind==='default' ? 'Default clip' : ('Track: '+((state.tracks.find(t=>t.index===p.trackIndex)||{}).label || ('#'+p.trackIndex)));
+      return '<div>'+label+' — <b>'+p.ref.fileName+'</b> ('+Math.round((p.ref.fileSize||0)/1024)+' KB)</div>';
+    }).join('');
+    relinkPanel.dataset.pending = JSON.stringify(pending);
+    relinkPanel.style.display = 'block';
+  }
+
+  function relinkFiles(fileList){
+    let pending = [];
+    try{ pending = JSON.parse(relinkPanel.dataset.pending || '[]'); }catch(e){}
+    const files = Array.from(fileList);
+    const stillMissing = [];
+
+    pending.forEach(p=>{
+      const match = files.find(f=> f.name===p.ref.fileName && (!p.ref.fileSize || f.size===p.ref.fileSize));
+      if(!match){ stillMissing.push(p); return; }
+      if(p.kind==='default'){
+        loadFileIntoSlot(match, state.defaultClip, clipStats, baseNoteSelect, document.getElementById('clipTrim'), ()=>{
+          state.defaultClip.baseNote = p.ref.baseNote;
+          state.defaultClip.startOffset = p.ref.startOffset;
+          state.defaultClip.endOffset = p.ref.endOffset;
+          state.defaultClip.normGain = p.ref.normGain;
+          baseNoteSelect.value = String(p.ref.baseNote);
+          attachTrimUI(document.getElementById('clipTrim'), state.defaultClip, baseNoteSelect, clipStats);
+        });
+      } else {
+        const row = trackList.children[p.trackIndex];
+        if(!row) return;
+        if(!state.trackClips[p.trackIndex]) state.trackClips[p.trackIndex] = createClipSlot();
+        const slot = state.trackClips[p.trackIndex];
+        const statusEl = row.querySelector('.track-status');
+        const trimEl = row.querySelector('.track-trim');
+        const selectEl = row.querySelector('.mini-base');
+        selectEl.style.display = 'inline-block';
+        loadFileIntoSlot(match, slot, statusEl, selectEl, trimEl, ()=>{
+          slot.baseNote = p.ref.baseNote;
+          slot.startOffset = p.ref.startOffset;
+          slot.endOffset = p.ref.endOffset;
+          slot.normGain = p.ref.normGain;
+          selectEl.value = String(p.ref.baseNote);
+          attachTrimUI(trimEl, slot, selectEl, statusEl);
+          row.classList.add('track-has-clip');
+          row.querySelector('.track-clip-badge').style.display = 'inline-block';
+        });
+      }
+    });
+
+    if(stillMissing.length){
+      relinkPanel.dataset.pending = JSON.stringify(stillMissing);
+      relinkList.innerHTML = stillMissing.map(p=>{
+        const label = p.kind==='default' ? 'Default clip' : ('Track: '+((state.tracks.find(t=>t.index===p.trackIndex)||{}).label || ('#'+p.trackIndex)));
+        return '<div>'+label+' — <b>'+p.ref.fileName+'</b> (still missing)</div>';
+      }).join('');
+      genStatus.textContent = 'Matched what it could — '+stillMissing.length+' clip(s) still need relinking, or assign them manually below.';
+    } else {
+      relinkPanel.style.display = 'none';
+      genStatus.textContent = 'All clips relinked.';
+    }
+  }
+
 
   // ---------- State ----------
   const state = {
@@ -904,7 +1219,8 @@
     defaultClip: createClipSlot(),
     trackClips: {},
     scheduleList: [],
-    gridTracks: []
+    gridTracks: [],
+    midiArrayBuffer: null
   };
   let playing = false;
   let exporting = false;
@@ -934,6 +1250,11 @@
     if((e.ctrlKey || e.metaKey) && e.key.toLowerCase()==='z'){
       e.preventDefault();
       hoveredTrimCtx.undoTrim();
+      return;
+    }
+    if(e.key === 'Backspace' || e.key === 'Delete'){
+      e.preventDefault();
+      hoveredTrimCtx.resetTrimToDefault();
       return;
     }
     if(e.key >= '0' && e.key <= '9'){
@@ -1038,7 +1359,7 @@
     stopPlayback();
     setupAudioContext();
     const startCtxTime = audioCtx.currentTime + 0.05;
-    const g = audioCtx.createGain(); g.gain.value = 0.28; g.connect(audioCtx.destination);
+    const g = audioCtx.createGain(); g.gain.value = 0.28 * (tr.volume!=null?tr.volume:1); g.connect(audioCtx.destination);
 
     if(tr.isDrum){
       tr.notes.forEach(n=>{
@@ -1071,16 +1392,22 @@
       });
     }
 
-    if(cached === 'failed'){ playTrackWithTone(tr, startCtxTime, g); return; }
+    if(cached === 'failed'){
+      genStatus.textContent = 'Could not load the "'+slug+'" instrument sound (browser or network issue) — using a fallback tone instead.';
+      playTrackWithTone(tr, startCtxTime, g);
+      return;
+    }
     if(cached){ playWithInstrument(cached); return; }
 
     genStatus.textContent = 'Loading '+tr.label+' sound…';
-    Soundfont.instrument(audioCtx, slug, { destination: g }).then(inst=>{
+    Soundfont.instrument(audioCtx, slug, { destination: g, soundfont: 'FluidR3_GM' }).then(inst=>{
       state.sfInstruments[slug] = inst;
       genStatus.textContent = '';
       playWithInstrument(inst);
-    }).catch(()=>{
+    }).catch((err)=>{
+      console.warn('Soundfont load failed for', slug, err);
       state.sfInstruments[slug] = 'failed';
+      genStatus.textContent = 'Could not load the "'+slug+'" instrument sound — using a fallback tone instead.';
       playTrackWithTone(tr, startCtxTime, g);
     });
   }
@@ -1110,6 +1437,19 @@
     startPlayback(false, shifted, state.defaultClip);
   }
 
+  function soloTrack(targetTr){
+    const alreadySoloed = state.tracks.every(t=> t.index===targetTr.index ? t.enabled : !t.enabled);
+    state.tracks.forEach(t=>{ t.enabled = alreadySoloed ? true : (t.index===targetTr.index); });
+    state.tracks.forEach((t,i)=>{
+      const row = trackList.children[i];
+      if(!row) return;
+      const cb = row.querySelector('.track-enable-checkbox');
+      cb.checked = t.enabled;
+      row.classList.toggle('track-disabled', !t.enabled);
+    });
+    scheduleSaveProject();
+  }
+
   function renderTrackList(){
     trackList.innerHTML = '';
     const dur = computeTotalDuration();
@@ -1118,8 +1458,9 @@
       row.className = 'track-row';
       row.innerHTML =
         '<div class="track-head">'+
-          '<label style="display:flex; align-items:center; flex-shrink:0;"><input type="checkbox" class="track-enable-checkbox" checked title="Include this track in Preview/Record"></label>'+
-          '<div class="track-name-wrap"><div class="track-name"></div><span class="main-badge" style="display:none;">★ likely main line</span></div>'+
+          '<label style="display:flex; align-items:center; flex-shrink:0;"><input type="checkbox" class="track-enable-checkbox" checked title="Include this track in Preview/Record (alt-click to solo)"></label>'+
+          '<button class="mini-btn solo-btn" title="Solo this track — mute every other track" style="flex-shrink:0; padding:2px 8px; font-size:10px;">solo</button>'+
+          '<div class="track-name-wrap"><div class="track-name"></div><span class="main-badge" style="display:none;">★ likely main line</span><span class="track-clip-badge" style="display:none;">own clip</span></div>'+
           '<div class="track-meta"></div>'+
         '</div>'+
         '<canvas class="miniroll" width="700" height="46"></canvas>'+
@@ -1131,6 +1472,12 @@
           '<button class="mini-btn hardcode-default">📌 lock in default clip</button>'+
           '<select class="mini-base"></select>'+
         '</div>'+
+        '<div class="track-controls" style="margin-top:6px;">'+
+          '<label style="font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px;">'+
+            'vol <input type="range" class="track-volume" min="0" max="150" value="100" style="width:110px;">'+
+            '<span class="track-volume-readout">100%</span>'+
+          '</label>'+
+        '</div>'+
         '<div class="track-status">Uses the default clip.</div>'+
         '<div class="track-trim"></div>';
 
@@ -1139,13 +1486,40 @@
       row.querySelector('.track-meta').textContent = tr.notes.length+' notes · '+noteName(tr.lowMidi)+'–'+noteName(tr.highMidi);
       renderMiniRoll(row.querySelector('.miniroll'), tr.notes, dur);
 
+      row.querySelector('.track-enable-checkbox').addEventListener('click', e=>{
+        if(e.altKey){
+          e.preventDefault();
+          soloTrack(tr);
+        }
+      });
       row.querySelector('.track-enable-checkbox').addEventListener('change', e=>{
         tr.enabled = e.target.checked;
         row.classList.toggle('track-disabled', !e.target.checked);
+        scheduleSaveProject();
       });
+      row.querySelector('.solo-btn').addEventListener('click', ()=> soloTrack(tr));
 
       const selectEl = row.querySelector('.mini-base');
       buildNoteOptions(selectEl, 60);
+
+      const volumeSlider = row.querySelector('.track-volume');
+      const volumeReadout = row.querySelector('.track-volume-readout');
+      volumeSlider.value = String(Math.round((tr.volume!=null?tr.volume:1)*100));
+      volumeReadout.textContent = volumeSlider.value+'%';
+      volumeSlider.addEventListener('input', ()=>{
+        tr.volume = parseInt(volumeSlider.value,10)/100;
+        volumeReadout.textContent = volumeSlider.value+'%';
+        scheduleSaveProject();
+      });
+      volumeSlider.addEventListener('keydown', e=>{
+        if(e.key === 'Backspace' || e.key === 'Delete'){
+          e.preventDefault();
+          volumeSlider.value = '100';
+          tr.volume = 1;
+          volumeReadout.textContent = '100%';
+          scheduleSaveProject();
+        }
+      });
 
       row.querySelector('.play-notes').addEventListener('click', ()=>previewTrackNotes(tr));
       row.querySelector('.play-with-clip').addEventListener('click', ()=>previewTrackWithClip(tr));
@@ -1159,7 +1533,10 @@
         const statusEl = row.querySelector('.track-status');
         const trimEl = row.querySelector('.track-trim');
         selectEl.style.display = 'inline-block';
-        loadFileIntoSlot(file, slot, statusEl, selectEl, trimEl);
+        loadFileIntoSlot(file, slot, statusEl, selectEl, trimEl, (success)=>{
+          row.classList.toggle('track-has-clip', success);
+          row.querySelector('.track-clip-badge').style.display = success ? 'inline-block' : 'none';
+        });
       });
 
       row.querySelector('.hardcode-default').addEventListener('click', ()=>{
@@ -1177,12 +1554,16 @@
         statusEl.classList.remove('err');
         statusEl.innerHTML = 'Locked in a copy of the default clip · '+(slot.buffer?slot.buffer.duration.toFixed(2):'?')+'s — this track now keeps this clip even if the default changes later.';
         attachTrimUI(trimEl, slot, selectEl, statusEl);
+        row.classList.add('track-has-clip');
+        row.querySelector('.track-clip-badge').style.display = 'inline-block';
         refreshButtons();
+        scheduleSaveProject();
       });
 
       selectEl.addEventListener('change', (e)=>{
         const slot = state.trackClips[tr.index];
         if(slot) slot.baseNote = parseInt(e.target.value,10);
+        scheduleSaveProject();
       });
 
       trackList.appendChild(row);
@@ -1195,8 +1576,9 @@
     if(!file) return;
     file.arrayBuffer().then(buf=>{
       try{
+        state.midiArrayBuffer = buf;
         state.tracks = parseMidi(buf);
-        state.tracks.forEach(t=> t.enabled = true);
+        state.tracks.forEach(t=>{ t.enabled = true; t.volume = 1; });
         state.trackClips = {};
         state.allNotesFlat = [];
 
@@ -1223,6 +1605,7 @@
         drawTrackerTicks();
         renderTrackList();
         refreshButtons();
+        scheduleSaveProject();
       }catch(err){
         midiStats.textContent = err.message;
         midiStats.classList.add('err');
@@ -1238,6 +1621,7 @@
 
   baseNoteSelect.addEventListener('change', e=>{
     state.defaultClip.baseNote = parseInt(e.target.value,10);
+    scheduleSaveProject();
   });
 
   function stopPlayback(){
@@ -1278,7 +1662,7 @@
       ctx2d.fillStyle = '#0b0b12'; ctx2d.fillRect(x,y,cellW,cellH);
 
       let drewFrame = false;
-      if(gt.hasVideo && gt.videoEl){
+      if(gt.activeItem && gt.hasVideo && gt.videoEl){
         if(gt.videoEl.readyState >= 2){
           try{ gt.frameCtx.drawImage(gt.videoEl, 0, 0, gt.frameCanvas.width, gt.frameCanvas.height); gt.hasCachedFrame = true; }catch(e){}
         }
@@ -1333,6 +1717,8 @@
         gt.cursor = idx;
         const item = gt.schedule[idx];
         gt.activeItem = item;
+        gt.noteEndTime = (item.time - item.preRoll) + (item.playLen/item.rate);
+        gt.heldAtEnd = false;
         if(gt.hasVideo && gt.videoEl){
           try{
             gt.videoEl.currentTime = item.playOffset;
@@ -1340,6 +1726,12 @@
             gt.videoEl.play().catch(()=>{});
           }catch(err){}
         }
+      }
+      // Once the note's actual sounding duration is up, stop the picture too — otherwise
+      // it just keeps rolling through any gap before the next note fires.
+      if(!gt.heldAtEnd && gt.activeItem && gt.noteEndTime!=null && elapsed >= gt.noteEndTime){
+        gt.heldAtEnd = true;
+        if(gt.hasVideo && gt.videoEl){ try{ gt.videoEl.pause(); }catch(e){} }
       }
     });
 
@@ -1401,22 +1793,41 @@
       item.preRoll = preRoll;
       item.playOffset = Math.max(0, trimStart - preRoll*rate);
       item.playLen = preRoll*rate + normalPlayLen;
+      const trackMeta = state.tracks.find(t=>t.index===item.trackIndex);
+      item.volume = (trackMeta && trackMeta.volume!=null) ? trackMeta.volume : 1;
     });
 
     const startCtxTime = audioCtx.currentTime + 0.2;
     const masterGain = audioCtx.createGain();
     masterGain.gain.value = 0.9;
-    masterGain.connect(audioCtx.destination);
+    const limiter = audioCtx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.15;
+    masterGain.connect(limiter);
+    limiter.connect(audioCtx.destination);
     let mediaDest = null;
-    if(record){ mediaDest = audioCtx.createMediaStreamDestination(); masterGain.connect(mediaDest); }
+    if(record){ mediaDest = audioCtx.createMediaStreamDestination(); limiter.connect(mediaDest); }
 
     scheduledSources = [];
     state.scheduleList.forEach(item=>{
       const src = audioCtx.createBufferSource();
       src.buffer = item.clip.buffer;
       src.playbackRate.value = item.rate;
-      src.connect(masterGain);
-      try{ src.start(startCtxTime+item.time-item.preRoll, item.playOffset, item.playLen); }catch(e){}
+      const noteGain = audioCtx.createGain();
+      const vol = (item.volume!=null?item.volume:1) * (item.clip.normGain!=null?item.clip.normGain:1);
+      const t0 = startCtxTime+item.time-item.preRoll;
+      const realDur = item.playLen/item.rate;
+      const fade = Math.min(0.008, realDur/4);
+      noteGain.gain.setValueAtTime(0, t0);
+      noteGain.gain.linearRampToValueAtTime(vol, t0+fade);
+      noteGain.gain.setValueAtTime(vol, Math.max(t0+fade, t0+realDur-fade));
+      noteGain.gain.linearRampToValueAtTime(0, t0+realDur);
+      src.connect(noteGain);
+      noteGain.connect(masterGain);
+      try{ src.start(t0, item.playOffset, item.playLen); }catch(e){}
       scheduledSources.push(src);
     });
 
@@ -1522,6 +1933,8 @@
       item.rate = rate; item.preRoll = preRoll;
       item.playOffset = Math.max(0, trimStart-preRoll*rate);
       item.playLen = preRoll*rate + normalPlayLen;
+      const trackMeta = state.tracks.find(t=>t.index===item.trackIndex);
+      item.volume = (trackMeta && trackMeta.volume!=null) ? trackMeta.volume : 1;
     });
 
     const totalDuration = computeDurationFor(sourceNotes);
@@ -1549,14 +1962,30 @@
     const offlineCtx = new OfflineAudioContext(2, Math.max(1, Math.ceil(totalDuration*sampleRate)), sampleRate);
     const masterGain = offlineCtx.createGain();
     masterGain.gain.value = 0.9;
-    masterGain.connect(offlineCtx.destination);
+    const limiter = offlineCtx.createDynamicsCompressor();
+    limiter.threshold.value = -3;
+    limiter.knee.value = 0;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.15;
+    masterGain.connect(limiter);
+    limiter.connect(offlineCtx.destination);
     scheduleList.forEach(item=>{
       const src = offlineCtx.createBufferSource();
       src.buffer = item.clip.buffer;
       src.playbackRate.value = item.rate;
-      src.connect(masterGain);
-      const startTime = Math.max(0, item.time-item.preRoll);
-      try{ src.start(startTime, item.playOffset, item.playLen); }catch(e){}
+      const noteGain = offlineCtx.createGain();
+      const vol = (item.volume!=null?item.volume:1) * (item.clip.normGain!=null?item.clip.normGain:1);
+      const t0 = Math.max(0, item.time-item.preRoll);
+      const realDur = item.playLen/item.rate;
+      const fade = Math.min(0.008, realDur/4);
+      noteGain.gain.setValueAtTime(0, t0);
+      noteGain.gain.linearRampToValueAtTime(vol, t0+fade);
+      noteGain.gain.setValueAtTime(vol, Math.max(t0+fade, t0+realDur-fade));
+      noteGain.gain.linearRampToValueAtTime(0, t0+realDur);
+      src.connect(noteGain);
+      noteGain.connect(masterGain);
+      try{ src.start(t0, item.playOffset, item.playLen); }catch(e){}
     });
     return await offlineCtx.startRendering();
   }
@@ -1621,7 +2050,8 @@
           gt.activeItem = gt.schedule[idx];
           if(gt.hasVideo){
             const item = gt.activeItem;
-            const localT = item.playOffset + Math.max(0, elapsed-(item.time-item.preRoll))*item.rate;
+            const heldElapsed = Math.min(Math.max(0, elapsed-(item.time-item.preRoll)), item.playLen/item.rate);
+            const localT = item.playOffset + heldElapsed*item.rate;
             await seekAndWait(gt.videoEl, localT);
           }
         }
@@ -1633,7 +2063,7 @@
         const x = col*cellW, y = row*cellH;
         octx.save(); octx.beginPath(); octx.rect(x,y,cellW,cellH); octx.clip();
         octx.fillStyle = '#0b0b12'; octx.fillRect(x,y,cellW,cellH);
-        if(gt.hasVideo && gt.videoEl.readyState >= 2){
+        if(gt.activeItem && gt.hasVideo && gt.videoEl.readyState >= 2){
           octx.drawImage(gt.videoEl, x, y, cellW, cellH);
         } else if(gt.activeItem){
           const item = gt.activeItem;
@@ -1694,6 +2124,12 @@
     properDownloadLink.classList.add('hidden');
     exportProgress.classList.remove('err');
     exportProgress.textContent = 'Starting export…';
+    const exportStartedAt = performance.now();
+    function formatElapsed(){
+      const secs = Math.round((performance.now()-exportStartedAt)/1000);
+      const m = Math.floor(secs/60), s = secs%60;
+      return m+':'+String(s).padStart(2,'0');
+    }
 
     let gridTrackDefsForCleanup = null;
     try{
@@ -1737,13 +2173,13 @@
       });
       audioEncoder.configure({ codec:'opus', sampleRate:48000, numberOfChannels: audioBuffer.numberOfChannels, bitrate:160000 });
 
-      exportProgress.textContent = 'Encoding audio…';
+      exportProgress.textContent = 'Encoding audio… (elapsed '+formatElapsed()+')';
       await encodeAudioOffline(audioBuffer, audioEncoder);
 
       exportProgress.textContent = 'Rendering video frame 0 — this can take a while, especially at high resolution/fps…';
       await renderVideoFramesOffline({
         gridTrackDefs, totalDuration, fps, width, height, videoEncoder,
-        onProgress: (done,total)=>{ exportProgress.textContent = 'Rendering frame '+done+' / '+total+'…'; },
+        onProgress: (done,total)=>{ exportProgress.textContent = 'Rendering frame '+done+' / '+total+' — elapsed '+formatElapsed()+'…'; },
         isCancelled: ()=> exportCancelled
       });
 
@@ -1752,7 +2188,7 @@
       const blob = new Blob([buffer], { type:'video/webm' });
       properDownloadLink.href = URL.createObjectURL(blob);
       properDownloadLink.classList.remove('hidden');
-      exportProgress.textContent = 'Done — proper export ready below.';
+      exportProgress.textContent = 'Done in '+formatElapsed()+' — proper export ready below.';
     }catch(err){
       if(err && err.message === 'cancelled'){
         exportProgress.textContent = 'Export cancelled.';
@@ -1775,6 +2211,53 @@
 
   btnProperExport.addEventListener('click', ()=>{ runProperExport(); });
   btnCancelExport.addEventListener('click', ()=>{ exportCancelled = true; });
+
+  btnSaveProject.addEventListener('click', ()=>{ downloadProjectFile(); });
+
+  loadProjectInput.addEventListener('change', e=>{
+    const file = e.target.files[0];
+    if(!file) return;
+    file.text().then(text=>{
+      try{
+        const meta = JSON.parse(text);
+        applyProjectMeta(meta);
+      }catch(err){
+        genStatus.textContent = "Couldn't read that project file — it doesn't look like valid JSON.";
+      }
+    });
+  });
+
+  relinkInput.addEventListener('change', e=>{
+    if(e.target.files.length) relinkFiles(e.target.files);
+  });
+
+  resumeBtn.addEventListener('click', ()=>{
+    resumeBanner.style.display = 'none';
+    try{
+      const meta = JSON.parse(localStorage.getItem(META_KEY));
+      if(meta) applyProjectMeta(meta);
+    }catch(err){
+      genStatus.textContent = 'Could not read the saved project.';
+    }
+  });
+  discardBtn.addEventListener('click', ()=>{
+    resumeBanner.style.display = 'none';
+    clearSavedProject();
+  });
+  clearSavedProjectLink.addEventListener('click', (e)=>{
+    e.preventDefault();
+    clearSavedProject();
+    genStatus.textContent = 'Saved project cleared.';
+  });
+
+  (function checkForSavedProject(){
+    let meta = null;
+    try{ meta = JSON.parse(localStorage.getItem(META_KEY) || 'null'); }catch(e){}
+    if(!meta || (!meta.midiBase64 && !meta.defaultClip)) return;
+    const when = meta.savedAt ? new Date(meta.savedAt).toLocaleString() : 'earlier';
+    resumeBannerText.textContent = 'Found a saved project from '+when+" — you'll need to relink your clip files after resuming.";
+    resumeBanner.style.display = 'flex';
+  })();
 
   window.addEventListener('beforeunload', (e)=>{
     const hasWork = state.allNotesFlat.length > 0 || !!state.defaultClip.buffer;
