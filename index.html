@@ -324,6 +324,31 @@
   const ctx2d = canvas.getContext('2d');
   const tracker = document.getElementById('tracker');
   const playhead = document.getElementById('playhead');
+  tracker.style.cursor = 'pointer';
+  let scrubbingTracker = false;
+  function scrubFromEvent(e){
+    if(isRecordingNow){
+      genStatus.textContent = "Can't scrub while recording — stop first.";
+      return;
+    }
+    const dur = computeTotalDuration();
+    if(dur <= 0) return;
+    const rect = tracker.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const frac = Math.max(0, Math.min(1, (clientX-rect.left)/rect.width));
+    scrubOffset = frac*dur;
+    playhead.style.left = (frac*100)+'%';
+    if(playing){
+      startPlayback(false, null, null, scrubOffset);
+    }
+  }
+  tracker.addEventListener('mousedown', e=>{ scrubbingTracker = true; scrubFromEvent(e); });
+  window.addEventListener('mousemove', e=>{ if(scrubbingTracker) scrubFromEvent(e); });
+  window.addEventListener('mouseup', ()=>{ scrubbingTracker = false; });
+  tracker.addEventListener('touchstart', e=>{ scrubbingTracker = true; scrubFromEvent(e); });
+  tracker.addEventListener('touchmove', e=>{ if(scrubbingTracker) scrubFromEvent(e); });
+  tracker.addEventListener('touchend', ()=>{ scrubbingTracker = false; });
+
   const downloadLink = document.getElementById('downloadLink');
   const btnProperExport = document.getElementById('btnProperExport');
   const btnCancelExport = document.getElementById('btnCancelExport');
@@ -598,7 +623,7 @@
     const v = document.createElement('video');
     v.muted = true; v.playsInline = true; v.style.display='none';
     document.body.appendChild(v);
-    return { videoEl: v, buffer:null, hasVideo:false, baseNote:60, startOffset:0, endOffset:null, videoURL:null, normGain:1 };
+    return { videoEl: v, buffer:null, hasVideo:false, baseNote:60, startOffset:0, endOffset:null, videoURL:null, normGain:1, continuousMode:false };
   }
 
   // Copies another slot's current buffer/video/trim/pitch/level into a brand new,
@@ -613,6 +638,7 @@
     slot.endOffset = source.endOffset;
     slot.videoURL = source.videoURL;
     slot.normGain = source.normGain;
+    slot.continuousMode = source.continuousMode;
     slot.fileName = source.fileName;
     slot.fileSize = source.fileSize;
     slot.fileLastModified = source.fileLastModified;
@@ -744,9 +770,22 @@
         '<button class="mini-btn zoom-fit">zoom out ⤢</button>'+
       '</div>'+
       '<div class="trim-row">'+
+        '<label style="font-size:11px;color:var(--muted); display:flex; align-items:center; gap:6px;"><input type="checkbox" class="continuous-mode-toggle" style="width:auto;"> 🌊 continuous mode — play through &amp; loop instead of restarting each note</label>'+
+      '</div>'+
+      '<div class="trim-row">'+
         '<label style="font-size:11px;color:var(--muted);">start <input type="number" class="trim-start-input" step="0.01" style="width:80px;background:#100e18;color:var(--text);border:1px solid var(--panel-line);border-radius:3px;padding:4px 6px;"></label>'+
         '<label style="font-size:11px;color:var(--muted);">end <input type="number" class="trim-end-input" step="0.01" style="width:80px;background:#100e18;color:var(--text);border:1px solid var(--panel-line);border-radius:3px;padding:4px 6px;"></label>'+
         '<span style="font-size:11px;color:var(--muted);">seconds — exact, for long clips</span>'+
+      '</div>'+
+      '<div class="trim-row" style="border-top:1px solid var(--panel-line); margin-top:8px; padding-top:8px;">'+
+        '<span style="font-size:11px;color:var(--muted);">saved moments for this file:</span>'+
+        '<select class="preset-select" style="width:auto; max-width:220px;"></select>'+
+        '<button class="mini-btn update-preset-btn">🔄 update selected</button>'+
+        '<button class="mini-btn delete-preset-btn">🗑 delete selected</button>'+
+      '</div>'+
+      '<div class="trim-row">'+
+        '<input type="text" class="preset-name-input" placeholder="name this moment (e.g. \'angry chair\')" style="flex:1; min-width:160px; background:#100e18;color:var(--text);border:1px solid var(--panel-line);border-radius:3px;padding:6px 8px;font-size:11px;">'+
+        '<button class="mini-btn save-preset-btn">💾 save as new saved moment</button>'+
       '</div>';
     container.appendChild(wrap);
     const canvasEl = wrap.querySelector('.waveform');
@@ -809,6 +848,12 @@
       }, 450);
     }
 
+    let libSaveTimer = null;
+    function scheduleLibrarySave(){
+      clearTimeout(libSaveTimer);
+      libSaveTimer = setTimeout(()=> updateActivePreset(slot), 600);
+    }
+
     function redraw(){
       drawWaveform(canvasEl, buffer, slot.viewStart, slot.viewEnd);
       drawTrimOverlay(canvasEl, buffer, slot.startOffset||0, slot.endOffset, slot.viewStart, slot.viewEnd);
@@ -820,6 +865,7 @@
       endInput.value = slot.endOffset.toFixed(3);
       scheduleAutoRecheck();
       scheduleSaveProject();
+      scheduleLibrarySave();
     }
     redraw();
 
@@ -888,11 +934,68 @@
         selectEl.value = String(clamped);
         const word = result.confidence > 0.6 ? 'sounds like' : 'rough guess —';
         if(statusEl) statusEl.innerHTML = 'Re-checked '+(slot.startOffset||0).toFixed(2)+'s–'+slot.endOffset.toFixed(2)+'s · '+word+' <b>'+noteName(result.midi)+'</b> ('+result.freq.toFixed(0)+'Hz, '+Math.round(result.confidence*100)+'% confident)';
+        updateActivePreset(slot);
       } else {
         if(statusEl) statusEl.innerHTML = 'Re-checked '+(slot.startOffset||0).toFixed(2)+'s–'+slot.endOffset.toFixed(2)+'s · sounds percussive there — base note left as is';
       }
     });
     wrap.querySelector('.zoom-fit').addEventListener('click', ()=>{ slot.viewStart = 0; slot.viewEnd = buffer.duration; redraw(); });
+    const continuousToggle = wrap.querySelector('.continuous-mode-toggle');
+    continuousToggle.checked = !!slot.continuousMode;
+    continuousToggle.addEventListener('change', ()=>{
+      slot.continuousMode = continuousToggle.checked;
+      scheduleSaveProject();
+      updateActivePreset(slot);
+    });
+
+    const presetSelect = wrap.querySelector('.preset-select');
+    const presetNameInput = wrap.querySelector('.preset-name-input');
+    function refreshPresetDropdown(){
+      const presets = listClipPresets(slot.fileName, slot.fileSize);
+      presetSelect.innerHTML = '<option value="">— unsaved / current edit —</option>' +
+        presets.map(p=>'<option value="'+p.id+'"'+(p.id===slot.activePresetId?' selected':'')+'>'+p.name.replace(/</g,'&lt;')+' ('+p.startOffset.toFixed(1)+'s–'+p.endOffset.toFixed(1)+'s)</option>').join('');
+      if(!slot.activePresetId) presetSelect.value = '';
+    }
+    refreshPresetDropdown();
+
+    presetSelect.addEventListener('change', ()=>{
+      if(!presetSelect.value){ slot.activePresetId = null; return; }
+      const presets = listClipPresets(slot.fileName, slot.fileSize);
+      const chosen = presets.find(p=>p.id===presetSelect.value);
+      if(!chosen) return;
+      applyPreset(slot, chosen, selectEl);
+      presetNameInput.value = chosen.name;
+      redraw();
+    });
+    wrap.querySelector('.save-preset-btn').addEventListener('click', ()=>{
+      const name = presetNameInput.value.trim();
+      const preset = saveNewPreset(slot, name);
+      if(preset){
+        refreshPresetDropdown();
+        presetSelect.value = preset.id;
+        if(statusEl) statusEl.textContent = 'Saved "'+preset.name+'" as a new moment for this file.';
+      }
+    });
+    wrap.querySelector('.update-preset-btn').addEventListener('click', ()=>{
+      if(!slot.activePresetId){
+        if(statusEl) statusEl.textContent = 'Pick a saved moment above first, or use "save as new" instead.';
+        return;
+      }
+      updateActivePreset(slot);
+      refreshPresetDropdown();
+      if(statusEl) statusEl.textContent = 'Updated that saved moment with your current trim.';
+    });
+    wrap.querySelector('.delete-preset-btn').addEventListener('click', ()=>{
+      if(!presetSelect.value){
+        if(statusEl) statusEl.textContent = 'Pick a saved moment above to delete it.';
+        return;
+      }
+      deletePreset(slot.fileName, slot.fileSize, presetSelect.value);
+      if(slot.activePresetId === presetSelect.value) slot.activePresetId = null;
+      refreshPresetDropdown();
+      if(statusEl) statusEl.textContent = 'Deleted that saved moment.';
+    });
+
     startInput.addEventListener('change', ()=>{
       pushHistory();
       let v = parseFloat(startInput.value); if(isNaN(v)) v = 0;
@@ -964,13 +1067,29 @@
         slot.normGain = computePeakNormGain(decoded);
         videoProbe.then(probe=>{
           slot.hasVideo = probe.hasVideo;
-          const result = detectPitch(decoded);
+          const presets = listClipPresets(slot.fileName, slot.fileSize);
           let visualNote = '';
           if(!slot.hasVideo){
             visualNote = probe.failed
               ? " · this browser can't decode the picture in this file (likely an unsupported video codec — try re-exporting as H.264 MP4 or VP9 WebM) — audio will still play, using a placeholder visual"
               : ' · audio only, using a placeholder visual';
           }
+
+          if(presets.length){
+            const chosen = presets[presets.length-1];
+            applyPreset(slot, chosen, selectEl);
+            const others = presets.length>1 ? ' ('+(presets.length-1)+' other saved moment'+(presets.length>2?'s':'')+' for this file — pick below)' : '';
+            statusEl.innerHTML = 'Loaded · '+decoded.duration.toFixed(2)+'s · using saved moment "'+chosen.name+'"'+others+visualNote;
+            if(probe.failed) statusEl.classList.add('err');
+            if(trimEl) attachTrimUI(trimEl, slot, selectEl, statusEl);
+            refreshButtons();
+            scheduleSaveProject();
+            if(onDone) onDone(true);
+            return;
+          }
+
+          slot.activePresetId = null;
+          const result = detectPitch(decoded);
           let trimNote = '';
           if(decoded.duration < 35){
             const guess = autoDetectTrim(decoded);
@@ -1005,6 +1124,76 @@
 
   // ---------- Project file (Premiere-style: remembers filenames + edit decisions, never copies the media itself) ----------
   const META_KEY = 'ytpmv_project_meta_v1';
+  const CLIP_LIBRARY_KEY = 'ytpmv_clip_library_v1';
+
+  function clipLibraryKey(fileName, fileSize){
+    return (fileName||'')+'|'+(fileSize||0);
+  }
+  function loadClipLibrary(){
+    try{ return JSON.parse(localStorage.getItem(CLIP_LIBRARY_KEY) || '{}'); }
+    catch(e){ return {}; }
+  }
+  function saveClipLibrary(lib){
+    try{ localStorage.setItem(CLIP_LIBRARY_KEY, JSON.stringify(lib)); }
+    catch(e){ console.warn('Could not save clip library:', e); }
+  }
+  function listClipPresets(fileName, fileSize){
+    if(!fileName) return [];
+    const lib = loadClipLibrary();
+    const entry = lib[clipLibraryKey(fileName, fileSize)];
+    return (entry && entry.presets) ? entry.presets : [];
+  }
+  function presetFromSlot(slot, name, id){
+    return {
+      id: id || ('p'+Date.now()+Math.floor(Math.random()*1000)),
+      name: name || (slot.startOffset||0).toFixed(1)+'s–'+slot.endOffset.toFixed(1)+'s',
+      baseNote: slot.baseNote,
+      startOffset: slot.startOffset,
+      endOffset: slot.endOffset,
+      normGain: slot.normGain,
+      continuousMode: !!slot.continuousMode,
+      savedAt: Date.now()
+    };
+  }
+  function saveNewPreset(slot, name){
+    if(!slot.fileName) return null;
+    const lib = loadClipLibrary();
+    const key = clipLibraryKey(slot.fileName, slot.fileSize);
+    if(!lib[key]) lib[key] = { presets: [] };
+    const preset = presetFromSlot(slot, name);
+    lib[key].presets.push(preset);
+    saveClipLibrary(lib);
+    slot.activePresetId = preset.id;
+    return preset;
+  }
+  function updateActivePreset(slot){
+    if(!slot.fileName || !slot.activePresetId) return;
+    const lib = loadClipLibrary();
+    const key = clipLibraryKey(slot.fileName, slot.fileSize);
+    const entry = lib[key];
+    if(!entry) return;
+    const idx = entry.presets.findIndex(p=>p.id===slot.activePresetId);
+    if(idx === -1) return;
+    const updated = presetFromSlot(slot, entry.presets[idx].name, slot.activePresetId);
+    entry.presets[idx] = updated;
+    saveClipLibrary(lib);
+  }
+  function deletePreset(fileName, fileSize, presetId){
+    const lib = loadClipLibrary();
+    const key = clipLibraryKey(fileName, fileSize);
+    if(!lib[key]) return;
+    lib[key].presets = lib[key].presets.filter(p=>p.id!==presetId);
+    saveClipLibrary(lib);
+  }
+  function applyPreset(slot, preset, selectEl){
+    slot.baseNote = preset.baseNote;
+    slot.startOffset = preset.startOffset;
+    slot.endOffset = preset.endOffset;
+    slot.normGain = (preset.normGain!=null) ? preset.normGain : slot.normGain;
+    slot.continuousMode = !!preset.continuousMode;
+    slot.activePresetId = preset.id;
+    if(selectEl) selectEl.value = String(preset.baseNote);
+  }
 
   function arrayBufferToBase64(buf){
     let binary = '';
@@ -1031,7 +1220,8 @@
       baseNote: slot.baseNote,
       startOffset: slot.startOffset,
       endOffset: slot.endOffset,
-      normGain: slot.normGain
+      normGain: slot.normGain,
+      continuousMode: !!slot.continuousMode
     };
   }
 
@@ -1173,6 +1363,7 @@
           state.defaultClip.startOffset = p.ref.startOffset;
           state.defaultClip.endOffset = p.ref.endOffset;
           state.defaultClip.normGain = p.ref.normGain;
+          state.defaultClip.continuousMode = !!p.ref.continuousMode;
           baseNoteSelect.value = String(p.ref.baseNote);
           attachTrimUI(document.getElementById('clipTrim'), state.defaultClip, baseNoteSelect, clipStats);
         });
@@ -1190,6 +1381,7 @@
           slot.startOffset = p.ref.startOffset;
           slot.endOffset = p.ref.endOffset;
           slot.normGain = p.ref.normGain;
+          slot.continuousMode = !!p.ref.continuousMode;
           selectEl.value = String(p.ref.baseNote);
           attachTrimUI(trimEl, slot, selectEl, statusEl);
           row.classList.add('track-has-clip');
@@ -1225,6 +1417,8 @@
   let playing = false;
   let exporting = false;
   let exportCancelled = false;
+  let scrubOffset = 0;
+  let isRecordingNow = false;
   let scheduledSources = [];
   let animId = null;
   let playbackStartPerf = 0;
@@ -1562,7 +1756,7 @@
 
       selectEl.addEventListener('change', (e)=>{
         const slot = state.trackClips[tr.index];
-        if(slot) slot.baseNote = parseInt(e.target.value,10);
+        if(slot){ slot.baseNote = parseInt(e.target.value,10); updateActivePreset(slot); }
         scheduleSaveProject();
       });
 
@@ -1621,6 +1815,7 @@
 
   baseNoteSelect.addEventListener('change', e=>{
     state.defaultClip.baseNote = parseInt(e.target.value,10);
+    updateActivePreset(state.defaultClip);
     scheduleSaveProject();
   });
 
@@ -1717,19 +1912,38 @@
         gt.cursor = idx;
         const item = gt.schedule[idx];
         gt.activeItem = item;
-        gt.noteEndTime = (item.time - item.preRoll) + (item.playLen/item.rate);
-        gt.heldAtEnd = false;
-        if(gt.hasVideo && gt.videoEl){
-          try{
-            gt.videoEl.currentTime = item.playOffset;
-            gt.videoEl.playbackRate = Math.min(Math.max(item.rate,0.0625),16);
-            gt.videoEl.play().catch(()=>{});
-          }catch(err){}
+        const rate = Math.min(Math.max(item.rate,0.0625),16);
+        if(gt.continuousMode){
+          if(gt.hasVideo && gt.videoEl){
+            if(!gt.continuousStarted){
+              gt.continuousStarted = true;
+              try{ gt.videoEl.currentTime = item.clip.startOffset||0; gt.videoEl.play().catch(()=>{}); }catch(e){}
+            }
+            try{ gt.videoEl.playbackRate = rate; }catch(e){}
+          }
+        } else {
+          gt.noteEndTime = (item.time - item.preRoll) + (item.playLen/item.rate);
+          gt.heldAtEnd = false;
+          if(gt.hasVideo && gt.videoEl){
+            try{
+              gt.videoEl.currentTime = item.playOffset;
+              gt.videoEl.playbackRate = rate;
+              gt.videoEl.play().catch(()=>{});
+            }catch(err){}
+          }
         }
       }
-      // Once the note's actual sounding duration is up, stop the picture too — otherwise
-      // it just keeps rolling through any gap before the next note fires.
-      if(!gt.heldAtEnd && gt.activeItem && gt.noteEndTime!=null && elapsed >= gt.noteEndTime){
+      if(gt.continuousMode){
+        // Loop the trimmed region every frame — <video> has no native sub-region loop.
+        if(gt.hasVideo && gt.videoEl && gt.activeItem){
+          const trimEnd = (gt.activeItem.clip.endOffset==null) ? gt.activeItem.clip.buffer.duration : gt.activeItem.clip.endOffset;
+          if(gt.videoEl.currentTime >= trimEnd - 0.03){
+            try{ gt.videoEl.currentTime = gt.activeItem.clip.startOffset||0; }catch(e){}
+          }
+        }
+      } else if(!gt.heldAtEnd && gt.activeItem && gt.noteEndTime!=null && elapsed >= gt.noteEndTime){
+        // Once the note's actual sounding duration is up, stop the picture too — otherwise
+        // it just keeps rolling through any gap before the next note fires.
         gt.heldAtEnd = true;
         if(gt.hasVideo && gt.videoEl){ try{ gt.videoEl.pause(); }catch(e){} }
       }
@@ -1747,7 +1961,8 @@
     return end + 0.4;
   }
 
-  function startPlayback(record, notesListOverride, forceClip){
+  function startPlayback(record, notesListOverride, forceClip, seekOffset){
+    seekOffset = seekOffset || 0;
     setupAudioContext();
     stopPlayback();
 
@@ -1755,7 +1970,8 @@
       const tr = state.tracks.find(t=>t.index===n.trackIndex);
       return !tr || tr.enabled !== false;
     });
-    state.scheduleList = sourceNotes
+    const notesForSchedule = seekOffset > 0 ? sourceNotes.filter(n=> n.time >= seekOffset) : sourceNotes;
+    state.scheduleList = notesForSchedule
       .map(n=>{
         const clip = forceClip || state.trackClips[n.trackIndex] || state.defaultClip;
         return (clip && clip.buffer) ? { time:n.time, duration:n.duration, midi:n.midi, trackIndex:n.trackIndex, clip } : null;
@@ -1780,7 +1996,7 @@
       const normalPlayLen = Math.max(0.01, Math.min(neededSourceTime, availableFromTrim));
 
       let preRoll = 0;
-      if(anticipateOn && anticipateSeconds > 0){
+      if(!item.clip.continuousMode && anticipateOn && anticipateSeconds > 0){
         const prevTime = lastTimeByClip.has(item.clip) ? lastTimeByClip.get(item.clip) : -Infinity;
         const gapBefore = item.time - prevTime;
         const maxByGap = Math.max(0, gapBefore - 0.01); // small safety margin so it never touches the previous note
@@ -1797,7 +2013,7 @@
       item.volume = (trackMeta && trackMeta.volume!=null) ? trackMeta.volume : 1;
     });
 
-    const startCtxTime = audioCtx.currentTime + 0.2;
+    const startCtxTime = audioCtx.currentTime + 0.2 - seekOffset;
     const masterGain = audioCtx.createGain();
     masterGain.gain.value = 0.9;
     const limiter = audioCtx.createDynamicsCompressor();
@@ -1812,7 +2028,18 @@
     if(record){ mediaDest = audioCtx.createMediaStreamDestination(); limiter.connect(mediaDest); }
 
     scheduledSources = [];
+    const discreteItems = [];
+    const continuousByTrack = new Map();
     state.scheduleList.forEach(item=>{
+      if(item.clip.continuousMode){
+        if(!continuousByTrack.has(item.trackIndex)) continuousByTrack.set(item.trackIndex, []);
+        continuousByTrack.get(item.trackIndex).push(item);
+      } else {
+        discreteItems.push(item);
+      }
+    });
+
+    discreteItems.forEach(item=>{
       const src = audioCtx.createBufferSource();
       src.buffer = item.clip.buffer;
       src.playbackRate.value = item.rate;
@@ -1828,6 +2055,36 @@
       src.connect(noteGain);
       noteGain.connect(masterGain);
       try{ src.start(t0, item.playOffset, item.playLen); }catch(e){}
+      scheduledSources.push(src);
+    });
+
+    // Continuous mode: one looped source per track that never restarts — its
+    // playback rate is automated at each note's onset instead of retriggering.
+    continuousByTrack.forEach(items=>{
+      items.sort((a,b)=>a.time-b.time);
+      const clip = items[0].clip;
+      const trimStart = clip.startOffset||0;
+      const trimEnd = Math.max(trimStart+0.05, (clip.endOffset==null)? clip.buffer.duration : clip.endOffset);
+      const src = audioCtx.createBufferSource();
+      src.buffer = clip.buffer;
+      src.loop = true;
+      src.loopStart = trimStart;
+      src.loopEnd = trimEnd;
+      const noteGain = audioCtx.createGain();
+      const vol = (items[0].volume!=null?items[0].volume:1) * (clip.normGain!=null?clip.normGain:1);
+      noteGain.gain.value = vol;
+      src.connect(noteGain);
+      noteGain.connect(masterGain);
+      const firstT0 = startCtxTime + items[0].time - items[0].preRoll;
+      src.playbackRate.setValueAtTime(items[0].rate, firstT0);
+      items.forEach((item,i)=>{
+        if(i===0) return;
+        src.playbackRate.setValueAtTime(item.rate, startCtxTime+item.time-item.preRoll);
+      });
+      try{
+        src.start(firstT0, trimStart);
+        src.stop(startCtxTime + computeDurationFor(sourceNotes));
+      }catch(e){}
       scheduledSources.push(src);
     });
 
@@ -1852,33 +2109,36 @@
         frameCanvas.width = 320; frameCanvas.height = 180;
         frameCtx = frameCanvas.getContext('2d');
       }
-      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, frameCanvas, frameCtx, hasCachedFrame:false };
+      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, frameCanvas, frameCtx, hasCachedFrame:false, continuousMode: !!clip.continuousMode, continuousStarted:false };
     });
 
     playing = true;
-    playbackStartPerf = performance.now();
+    playbackStartPerf = performance.now() - seekOffset*1000;
     totalDuration = computeDurationFor(sourceNotes);
     refreshButtons();
     requestAnimationFrame(renderLoop);
-    playbackTimeoutId = setTimeout(()=>{ stopPlayback(); }, totalDuration*1000 + 300);
+    playbackTimeoutId = setTimeout(()=>{ scrubOffset = 0; stopPlayback(); }, Math.max(0, totalDuration-seekOffset)*1000 + 300);
     return mediaDest;
   }
 
   btnPreview.addEventListener('click', ()=>{
-    genStatus.textContent = 'Playing preview…';
-    startPlayback(false);
+    genStatus.textContent = scrubOffset>0 ? 'Playing preview from '+scrubOffset.toFixed(1)+'s…' : 'Playing preview…';
+    startPlayback(false, null, null, scrubOffset);
   });
 
   btnStop.addEventListener('click', ()=>{
     stopPlayback();
+    scrubOffset = 0;
+    playhead.style.left = '0%';
     genStatus.textContent = 'Stopped.';
     if(window.__currentRecorder && window.__currentRecorder.state === 'recording') window.__currentRecorder.stop();
   });
 
   btnRecord.addEventListener('click', ()=>{
     downloadLink.classList.add('hidden');
-    genStatus.textContent = 'Recording — keep this tab visible…';
-    const mediaDest = startPlayback(true);
+    genStatus.textContent = scrubOffset>0 ? 'Recording from '+scrubOffset.toFixed(1)+'s — keep this tab visible…' : 'Recording — keep this tab visible…';
+    const startedFrom = scrubOffset;
+    const mediaDest = startPlayback(true, null, null, startedFrom);
     let canvasStream;
     try{ canvasStream = canvas.captureStream(30); }
     catch(err){ genStatus.textContent = "This browser won't let me capture the canvas for recording."; return; }
@@ -1889,14 +2149,16 @@
     const chunks = [];
     recorder.ondataavailable = e=>{ if(e.data.size>0) chunks.push(e.data); };
     recorder.onstop = ()=>{
+      isRecordingNow = false;
       const blob = new Blob(chunks, {type:mimeType});
       downloadLink.href = URL.createObjectURL(blob);
       downloadLink.classList.remove('hidden');
       genStatus.textContent = 'Done — your file is ready below.';
     };
+    isRecordingNow = true;
     recorder.start();
     window.__currentRecorder = recorder;
-    setTimeout(()=>{ if(recorder.state === 'recording') recorder.stop(); }, totalDuration*1000 + 500);
+    setTimeout(()=>{ if(recorder.state === 'recording') recorder.stop(); }, Math.max(0, totalDuration-startedFrom)*1000 + 500);
   });
 
   // ---------- Proper (offline, frame-accurate) export ----------
@@ -1922,7 +2184,7 @@
       const neededSourceTime = item.duration*rate;
       const normalPlayLen = Math.max(0.01, Math.min(neededSourceTime, availableFromTrim));
       let preRoll = 0;
-      if(anticipateOn && anticipateSeconds > 0){
+      if(!item.clip.continuousMode && anticipateOn && anticipateSeconds > 0){
         const prevTime = lastTimeByClip.has(item.clip) ? lastTimeByClip.get(item.clip) : -Infinity;
         const gapBefore = item.time - prevTime;
         const maxByGap = Math.max(0, gapBefore-0.01);
@@ -1952,7 +2214,7 @@
         document.body.appendChild(videoEl);
         hasVideo = true;
       }
-      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo };
+      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, continuousMode: !!clip.continuousMode };
     });
 
     return { scheduleList, totalDuration, gridTrackDefs };
@@ -1970,7 +2232,16 @@
     limiter.release.value = 0.15;
     masterGain.connect(limiter);
     limiter.connect(offlineCtx.destination);
+    const discreteItems = [];
+    const continuousByTrack = new Map();
     scheduleList.forEach(item=>{
+      if(item.clip.continuousMode){
+        if(!continuousByTrack.has(item.trackIndex)) continuousByTrack.set(item.trackIndex, []);
+        continuousByTrack.get(item.trackIndex).push(item);
+      } else discreteItems.push(item);
+    });
+
+    discreteItems.forEach(item=>{
       const src = offlineCtx.createBufferSource();
       src.buffer = item.clip.buffer;
       src.playbackRate.value = item.rate;
@@ -1986,6 +2257,30 @@
       src.connect(noteGain);
       noteGain.connect(masterGain);
       try{ src.start(t0, item.playOffset, item.playLen); }catch(e){}
+    });
+
+    continuousByTrack.forEach(items=>{
+      items.sort((a,b)=>a.time-b.time);
+      const clip = items[0].clip;
+      const trimStart = clip.startOffset||0;
+      const trimEnd = Math.max(trimStart+0.05, (clip.endOffset==null)? clip.buffer.duration : clip.endOffset);
+      const src = offlineCtx.createBufferSource();
+      src.buffer = clip.buffer;
+      src.loop = true;
+      src.loopStart = trimStart;
+      src.loopEnd = trimEnd;
+      const noteGain = offlineCtx.createGain();
+      const vol = (items[0].volume!=null?items[0].volume:1) * (clip.normGain!=null?clip.normGain:1);
+      noteGain.gain.value = vol;
+      src.connect(noteGain);
+      noteGain.connect(masterGain);
+      const firstT0 = Math.max(0, items[0].time-items[0].preRoll);
+      src.playbackRate.setValueAtTime(items[0].rate, firstT0);
+      items.forEach((item,i)=>{
+        if(i===0) return;
+        src.playbackRate.setValueAtTime(item.rate, Math.max(0, item.time-item.preRoll));
+      });
+      try{ src.start(firstT0, trimStart); src.stop(totalDuration); }catch(e){}
     });
     return await offlineCtx.startRendering();
   }
@@ -2038,6 +2333,18 @@
     const rows = n ? Math.ceil(n/cols) : 1;
     const cellW = width/cols, cellH = height/rows;
 
+    gridTrackDefs.forEach(gt=>{
+      if(gt.continuousMode && gt.schedule.length){
+        let cum = 0;
+        gt.cumBufferTime = [0];
+        for(let i=1;i<gt.schedule.length;i++){
+          const prev = gt.schedule[i-1];
+          cum += (gt.schedule[i].time - prev.time) * prev.rate;
+          gt.cumBufferTime.push(cum);
+        }
+      }
+    });
+
     for(let f=0; f<frameCount; f++){
       if(isCancelled()) throw new Error('cancelled');
       const elapsed = f/fps;
@@ -2050,9 +2357,20 @@
           gt.activeItem = gt.schedule[idx];
           if(gt.hasVideo){
             const item = gt.activeItem;
-            const heldElapsed = Math.min(Math.max(0, elapsed-(item.time-item.preRoll)), item.playLen/item.rate);
-            const localT = item.playOffset + heldElapsed*item.rate;
-            await seekAndWait(gt.videoEl, localT);
+            if(gt.continuousMode){
+              const clip = item.clip;
+              const trimStart = clip.startOffset||0;
+              const trimEnd = Math.max(trimStart+0.05, (clip.endOffset==null)?clip.buffer.duration:clip.endOffset);
+              const regionLen = trimEnd-trimStart;
+              const bufferTimeConsumed = gt.cumBufferTime[idx] + Math.max(0, elapsed-item.time)*item.rate;
+              let localT = trimStart + (bufferTimeConsumed % regionLen);
+              if(localT < trimStart) localT += regionLen;
+              await seekAndWait(gt.videoEl, localT);
+            } else {
+              const heldElapsed = Math.min(Math.max(0, elapsed-(item.time-item.preRoll)), item.playLen/item.rate);
+              const localT = item.playOffset + heldElapsed*item.rate;
+              await seekAndWait(gt.videoEl, localT);
+            }
           }
         }
       }
