@@ -243,10 +243,12 @@
       </label>
       <div class="controls">
         <button class="action btn-preview" id="btnProperExport" disabled>⚙ Export properly</button>
+        <button class="action btn-preview" id="btnPerTrackExport" disabled>📦 Export each track individually</button>
         <button class="action btn-stop" id="btnCancelExport" disabled>■ Cancel export</button>
       </div>
       <div class="stat-line" id="exportProgress"></div>
       <a href="#" class="download-link hidden" id="properDownloadLink" download="ytpmv-proper.webm">Download your properly-exported YTPMV (.webm)</a>
+      <div id="perTrackDownloads"></div>
     </div>
 
     <div class="stage">
@@ -362,6 +364,8 @@
 
   const downloadLink = document.getElementById('downloadLink');
   const btnProperExport = document.getElementById('btnProperExport');
+  const btnPerTrackExport = document.getElementById('btnPerTrackExport');
+  const perTrackDownloadsEl = document.getElementById('perTrackDownloads');
   const btnCancelExport = document.getElementById('btnCancelExport');
   const exportFpsSelect = document.getElementById('exportFpsSelect');
   const exportProgress = document.getElementById('exportProgress');
@@ -663,6 +667,28 @@
   // Scans the whole decoded buffer for its peak sample and returns a gain that would
   // bring that peak up (or down) to a consistent target level. Capped so we don't
   // wildly amplify the noise floor of a near-silent recording.
+  // Some source files decode with one channel essentially silent (a browser quirk
+  // with certain channel layouts, e.g. "dual mono" tracks) even though they play
+  // fine in a real media player. If one channel is near-dead relative to the other,
+  // duplicate the louder channel into both rather than leaving playback lopsided.
+  function fixLopsidedChannels(buffer, ctx){
+    if(buffer.numberOfChannels < 2) return buffer;
+    const ch0 = buffer.getChannelData(0), ch1 = buffer.getChannelData(1);
+    let peak0 = 0, peak1 = 0;
+    const step = Math.max(1, Math.floor(ch0.length/20000));
+    for(let i=0; i<ch0.length; i+=step){
+      const a0 = Math.abs(ch0[i]); if(a0>peak0) peak0 = a0;
+      const a1 = Math.abs(ch1[i]); if(a1>peak1) peak1 = a1;
+    }
+    const loud = Math.max(peak0, peak1), quiet = Math.min(peak0, peak1);
+    if(loud < 1e-4 || quiet/loud > 0.05) return buffer; // silent overall, or both channels genuinely have content — leave it alone
+    const source = peak0 >= peak1 ? ch0 : ch1;
+    const fixed = ctx.createBuffer(2, buffer.length, buffer.sampleRate);
+    fixed.copyToChannel(source, 0);
+    fixed.copyToChannel(source, 1);
+    return fixed;
+  }
+
   function computePeakNormGain(buffer){
     let peak = 0;
     for(let c=0; c<buffer.numberOfChannels; c++){
@@ -1085,6 +1111,9 @@
 
     file.arrayBuffer().then(buf=>{
       audioCtx.decodeAudioData(buf.slice(0)).then(decoded=>{
+        const rawDecoded = decoded;
+        decoded = fixLopsidedChannels(decoded, audioCtx);
+        const channelFixApplied = decoded !== rawDecoded;
         slot.buffer = decoded;
         slot.normGain = computePeakNormGain(decoded);
         videoProbe.then(probe=>{
@@ -1096,6 +1125,8 @@
               ? " · this browser can't decode the picture in this file (likely an unsupported video codec — try re-exporting as H.264 MP4 or VP9 WebM) — audio will still play, using a placeholder visual"
               : ' · audio only, using a placeholder visual';
           }
+          const channelFixNote = channelFixApplied ? ' · fixed a dead audio channel (was silent on one side)' : '';
+          visualNote = visualNote + channelFixNote;
 
           if(presets.length){
             const chosen = presets[presets.length-1];
@@ -1138,7 +1169,7 @@
           if(onDone) onDone(true);
         });
       }).catch(()=>{
-        statusEl.textContent = "Couldn't read audio from that file. Try a plain audio file (mp3/wav) or a standard mp4/webm video.";
+        statusEl.textContent = "Couldn't read audio from that file — the audio track is probably AC-3, E-AC-3 (Dolby Digital), or DTS, which browsers can't decode at all (common in movie rips). Convert with ffmpeg (-c:a aac) or Handbrake and try again.";
         statusEl.classList.add('err');
         if(onDone) onDone(false);
       });
@@ -1510,6 +1541,7 @@
     btnStop.disabled = !playing;
     resolutionSelect.disabled = playing;
     if(!exporting) btnProperExport.disabled = !ready || playing;
+    if(!exporting) btnPerTrackExport.disabled = !ready || playing;
   }
 
   function drawTrackerTicks(){
@@ -1932,6 +1964,46 @@
 
   // Classic "slice and dice" treemap: recursively bisects the rect, alternating
   // horizontal/vertical splits, weighted by each item's share of total weight.
+  // Structural importance: how "big" this track deserves to be at rest, based on
+  // things that don't change frame to frame — how busy it is relative to the
+  // busiest track, whether it's flagged as the likely main line, and its volume
+  // slider (a track turned down shouldn't dominate the layout just because it's busy).
+  function computeTrackBaseWeight(trackMeta, maxNotes){
+    if(!trackMeta) return 0.3;
+    const density = maxNotes>0 ? (trackMeta.notes.length/maxNotes) : 0.3;
+    const drumFactor = trackMeta.isDrum ? 0.5 : 1;
+    const mainFactor = trackMeta.likelyMain ? 1.3 : 1;
+    const volFactor = Math.max(0.15, Math.min(1.5, trackMeta.volume!=null ? trackMeta.volume : 1));
+    return Math.max(0.15, density) * drumFactor * mainFactor * volFactor;
+  }
+
+  // Groups a track's notes into "phrases" — runs of notes close enough together
+  // to read as one continuous passage — with a little trailing grace so the last
+  // note of a phrase doesn't instantly shrink the tile. This is what changes rarely
+  // (a handful of times per song) instead of every single note on/off.
+  const PHRASE_GAP = 1.5, PHRASE_GRACE = 0.8;
+  function computeTrackPhrases(trackMeta){
+    if(!trackMeta || !trackMeta.notes.length) return [];
+    const notes = trackMeta.notes;
+    const phrases = [];
+    let curStart = notes[0].time, curEnd = notes[0].time+notes[0].duration;
+    for(let i=1;i<notes.length;i++){
+      const n = notes[i];
+      if(n.time - curEnd > PHRASE_GAP){
+        phrases.push({ start: curStart, end: curEnd+PHRASE_GRACE });
+        curStart = n.time; curEnd = n.time+n.duration;
+      } else {
+        curEnd = Math.max(curEnd, n.time+n.duration);
+      }
+    }
+    phrases.push({ start: curStart, end: curEnd+PHRASE_GRACE });
+    return phrases;
+  }
+  function isInPhrase(phrases, t){
+    for(let i=0;i<phrases.length;i++){ if(t>=phrases[i].start && t<=phrases[i].end) return true; }
+    return false;
+  }
+
   function computeTreemapRects(items, x, y, w, h, horizontal){
     if(items.length === 0) return [];
     if(items.length === 1) return [{x,y,w,h}];
@@ -1968,15 +2040,36 @@
       const cellW = w/cols, cellH = h/rows;
       return gridTracks.map((gt,i)=>({ x:(i%cols)*cellW, y:Math.floor(i/cols)*cellH, w:cellW, h:cellH }));
     }
-    gridTracks.forEach(gt=>{
-      let target = 0;
-      if(gt.activeItem){
-        target = gt.continuousMode ? 1 : ((gt.noteEndTime!=null && elapsed < gt.noteEndTime) ? 1 : 0);
-      }
-      if(gt.activityLevel == null) gt.activityLevel = target;
-      gt.activityLevel += (target - gt.activityLevel) * 0.12;
+    const LAYOUT_DEBOUNCE = 0.4, LAYOUT_MAX_WAIT = 2.0;
+    if(!gridTracks._layoutState){
+      gridTracks._layoutState = { lastRaw:null, committed:null, pendingChangeAt:-Infinity, lastCommitAt:-Infinity };
+    }
+    const ls = gridTracks._layoutState;
+    const rawTargets = gridTracks.map(gt=>{
+      const inPhrase = gt.phrases && isInPhrase(gt.phrases, elapsed);
+      return (gt.baseWeight!=null ? gt.baseWeight : 0.5) * (inPhrase ? 2 : 1);
     });
-    const weighted = gridTracks.map(gt=>({ weight: 0.3 + Math.max(0, gt.activityLevel) }));
+    if(!ls.lastRaw){
+      ls.lastRaw = rawTargets.slice();
+      ls.committed = rawTargets.slice();
+    } else {
+      let changed = false;
+      for(let i=0;i<rawTargets.length;i++){ if(Math.abs(rawTargets[i]-ls.lastRaw[i])>0.001){ changed = true; break; } }
+      if(changed){ ls.lastRaw = rawTargets.slice(); ls.pendingChangeAt = elapsed; }
+      const settledLongEnough = (elapsed - ls.pendingChangeAt) >= LAYOUT_DEBOUNCE;
+      const waitedTooLong = (elapsed - ls.lastCommitAt) >= LAYOUT_MAX_WAIT;
+      if(settledLongEnough || waitedTooLong){
+        let differs = false;
+        for(let i=0;i<rawTargets.length;i++){ if(Math.abs(ls.lastRaw[i]-ls.committed[i])>0.001){ differs = true; break; } }
+        if(differs){ ls.committed = ls.lastRaw.slice(); ls.lastCommitAt = elapsed; }
+      }
+    }
+    gridTracks.forEach((gt,i)=>{
+      const target = ls.committed[i];
+      if(gt.activityLevel == null) gt.activityLevel = target;
+      gt.activityLevel += (target - gt.activityLevel) * 0.08;
+    });
+    const weighted = gridTracks.map(gt=>({ weight: 0.2 + Math.max(0, gt.activityLevel) }));
     const targetRects = computeTreemapRects(weighted, 0, 0, w, h, w>=h);
     gridTracks.forEach((gt,i)=>{
       const t = targetRects[i];
@@ -2241,6 +2334,9 @@
     const trackOrder = [];
     state.scheduleList.forEach(item=>{ if(!seenTracks.has(item.trackIndex)){ seenTracks.add(item.trackIndex); trackOrder.push(item.trackIndex); } });
 
+    const melodicForWeight = state.tracks.filter(t=>!t.isDrum);
+    const maxNotesForWeight = melodicForWeight.length ? Math.max(...melodicForWeight.map(t=>t.notes.length)) : (state.tracks.length ? Math.max(...state.tracks.map(t=>t.notes.length)) : 1);
+
     state.gridTracks = trackOrder.map(ti=>{
       const trackMeta = state.tracks.find(t=>t.index===ti);
       const schedule = state.scheduleList.filter(it=>it.trackIndex===ti);
@@ -2256,7 +2352,7 @@
         frameCanvas.width = 320; frameCanvas.height = 180;
         frameCtx = frameCanvas.getContext('2d');
       }
-      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, frameCanvas, frameCtx, hasCachedFrame:false, continuousMode: !!clip.continuousMode, continuousStarted:false };
+      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, frameCanvas, frameCtx, hasCachedFrame:false, continuousMode: !!clip.continuousMode, continuousStarted:false, baseWeight: computeTrackBaseWeight(trackMeta, maxNotesForWeight), phrases: computeTrackPhrases(trackMeta) };
     });
 
     playing = true;
@@ -2349,6 +2445,9 @@
     const totalDuration = computeDurationFor(sourceNotes);
     const seen = new Set(); const order = [];
     scheduleList.forEach(it=>{ if(!seen.has(it.trackIndex)){ seen.add(it.trackIndex); order.push(it.trackIndex); } });
+    const melodicForWeight2 = state.tracks.filter(t=>!t.isDrum);
+    const maxNotesForWeight2 = melodicForWeight2.length ? Math.max(...melodicForWeight2.map(t=>t.notes.length)) : (state.tracks.length ? Math.max(...state.tracks.map(t=>t.notes.length)) : 1);
+
     const gridTrackDefs = order.map(ti=>{
       const trackMeta = state.tracks.find(t=>t.index===ti);
       const schedule = scheduleList.filter(it=>it.trackIndex===ti);
@@ -2361,7 +2460,7 @@
         document.body.appendChild(videoEl);
         hasVideo = true;
       }
-      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, continuousMode: !!clip.continuousMode };
+      return { trackIndex: ti, label: trackMeta ? trackMeta.label : ('Track '+ti), schedule, cursor:-1, activeItem:null, videoEl, hasVideo, continuousMode: !!clip.continuousMode, baseWeight: computeTrackBaseWeight(trackMeta, maxNotesForWeight2), phrases: computeTrackPhrases(trackMeta) };
     });
 
     return { scheduleList, totalDuration, gridTrackDefs };
@@ -2568,6 +2667,56 @@
     });
   }
 
+  // The actual render+encode+mux pipeline, shared by the full combined export and
+  // the per-track export — takes a schedule/grid and returns a finished .webm Blob.
+  async function renderOneClip({ scheduleList, gridTrackDefs, totalDuration, width, height, fps, onProgress, isCancelled, onStatus }){
+    const muxerModule = await import('https://cdn.jsdelivr.net/npm/webm-muxer@latest/build/webm-muxer.mjs');
+    const { Muxer, ArrayBufferTarget } = muxerModule;
+
+    if(onStatus) onStatus('Rendering audio (offline, sample-accurate)…');
+    const audioBuffer = await renderAudioOffline(scheduleList, totalDuration, 48000);
+
+    const muxer = new Muxer({
+      target: new ArrayBufferTarget(),
+      video: { codec:'V_VP9', width, height, frameRate: fps },
+      audio: { codec:'A_OPUS', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: 48000 }
+    });
+
+    const videoEncoder = new VideoEncoder({
+      output: (chunk, meta)=> muxer.addVideoChunk(chunk, meta),
+      error: e=> console.error('video encoder error', e)
+    });
+    videoEncoder.configure({
+      codec: 'vp09.00.10.08',
+      width, height,
+      framerate: fps,
+      bitrate: Math.min(60_000_000, Math.max(4_000_000, Math.round(width*height*fps*0.02)))
+    });
+
+    const audioEncoder = new AudioEncoder({
+      output: (chunk, meta)=> muxer.addAudioChunk(chunk, meta),
+      error: e=> console.error('audio encoder error', e)
+    });
+    audioEncoder.configure({ codec:'opus', sampleRate:48000, numberOfChannels: audioBuffer.numberOfChannels, bitrate:160000 });
+
+    if(onStatus) onStatus('Encoding audio…');
+    await encodeAudioOffline(audioBuffer, audioEncoder);
+
+    if(onStatus) onStatus('Rendering video frame 0…');
+    await renderVideoFramesOffline({ gridTrackDefs, totalDuration, fps, width, height, videoEncoder, onProgress, isCancelled });
+
+    muxer.finalize();
+    const { buffer } = muxer.target;
+    return new Blob([buffer], { type:'video/webm' });
+  }
+
+  function cleanupGridTrackDefs(gridTrackDefs){
+    if(!gridTrackDefs) return;
+    gridTrackDefs.forEach(gt=>{
+      if(gt.videoEl){ try{ gt.videoEl.pause(); }catch(e){} if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl); }
+    });
+  }
+
   async function runProperExport(){
     if(!('VideoEncoder' in window) || !('AudioEncoder' in window)){
       exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, or Firefox 130+ — otherwise use 'Record & download' above instead.";
@@ -2583,8 +2732,10 @@
     exportCancelled = false;
     exporting = true;
     btnProperExport.disabled = true;
+    btnPerTrackExport.disabled = true;
     btnCancelExport.disabled = false;
     properDownloadLink.classList.add('hidden');
+    perTrackDownloadsEl.innerHTML = '';
     exportProgress.classList.remove('err');
     exportProgress.textContent = 'Starting export…';
     const exportStartedAt = performance.now();
@@ -2596,9 +2747,6 @@
 
     let gridTrackDefsForCleanup = null;
     try{
-      const muxerModule = await import('https://cdn.jsdelivr.net/npm/webm-muxer@latest/build/webm-muxer.mjs');
-      const { Muxer, ArrayBufferTarget } = muxerModule;
-
       const [width, height] = resolutionSelect.value.split('x').map(Number);
       const fps = parseInt(exportFpsSelect.value, 10) || 30;
 
@@ -2610,45 +2758,13 @@
         return;
       }
 
-      exportProgress.textContent = 'Rendering audio (offline, sample-accurate)…';
-      const audioBuffer = await renderAudioOffline(scheduleList, totalDuration, 48000);
-
-      const muxer = new Muxer({
-        target: new ArrayBufferTarget(),
-        video: { codec:'V_VP9', width, height, frameRate: fps },
-        audio: { codec:'A_OPUS', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: 48000 }
-      });
-
-      const videoEncoder = new VideoEncoder({
-        output: (chunk, meta)=> muxer.addVideoChunk(chunk, meta),
-        error: e=> console.error('video encoder error', e)
-      });
-      videoEncoder.configure({
-        codec: 'vp09.00.10.08',
-        width, height,
-        framerate: fps,
-        bitrate: Math.min(60_000_000, Math.max(4_000_000, Math.round(width*height*fps*0.02)))
-      });
-
-      const audioEncoder = new AudioEncoder({
-        output: (chunk, meta)=> muxer.addAudioChunk(chunk, meta),
-        error: e=> console.error('audio encoder error', e)
-      });
-      audioEncoder.configure({ codec:'opus', sampleRate:48000, numberOfChannels: audioBuffer.numberOfChannels, bitrate:160000 });
-
-      exportProgress.textContent = 'Encoding audio… (elapsed '+formatElapsed()+')';
-      await encodeAudioOffline(audioBuffer, audioEncoder);
-
-      exportProgress.textContent = 'Rendering video frame 0 — this can take a while, especially at high resolution/fps…';
-      await renderVideoFramesOffline({
-        gridTrackDefs, totalDuration, fps, width, height, videoEncoder,
+      const blob = await renderOneClip({
+        scheduleList, gridTrackDefs, totalDuration, width, height, fps,
+        onStatus: (msg)=>{ exportProgress.textContent = msg+' (elapsed '+formatElapsed()+')'; },
         onProgress: (done,total)=>{ exportProgress.textContent = 'Rendering frame '+done+' / '+total+' — elapsed '+formatElapsed()+'…'; },
         isCancelled: ()=> exportCancelled
       });
 
-      muxer.finalize();
-      const { buffer } = muxer.target;
-      const blob = new Blob([buffer], { type:'video/webm' });
       properDownloadLink.href = URL.createObjectURL(blob);
       properDownloadLink.classList.remove('hidden');
       exportProgress.textContent = 'Done in '+formatElapsed()+' — proper export ready below.';
@@ -2660,10 +2776,129 @@
         exportProgress.textContent = 'Export failed: '+(err && err.message ? err.message : 'unknown error')+" — your browser or this clip/codec combo may not be supported. 'Record & download' above still works as a fallback.";
         exportProgress.classList.add('err');
       }
-      if(gridTrackDefsForCleanup){
-        gridTrackDefsForCleanup.forEach(gt=>{
-          if(gt.videoEl){ try{ gt.videoEl.pause(); }catch(e){} if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl); }
+      cleanupGridTrackDefs(gridTrackDefsForCleanup);
+    } finally {
+      exporting = false;
+      btnCancelExport.disabled = true;
+      refreshButtons();
+    }
+  }
+
+  // Same pipeline, run once per enabled track — each track's own notes, re-based to
+  // start at time 0 (so you're not exporting a long silent lead-in), using whatever
+  // clip that track actually resolves to. Produces one .webm per track, sequentially
+  // (not in parallel, to keep memory/encoder load sane).
+  async function runPerTrackExport(){
+    if(!('VideoEncoder' in window) || !('AudioEncoder' in window)){
+      exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, or Firefox 130+.";
+      exportProgress.classList.add('err');
+      return;
+    }
+    if(!state.allNotesFlat.length){
+      exportProgress.textContent = 'Load a MIDI file first.';
+      return;
+    }
+    const tracksToExport = state.tracks.filter(t=>{
+      if(t.enabled === false) return false;
+      const clip = state.trackClips[t.index] || state.defaultClip;
+      return clip && clip.buffer && t.notes.length;
+    });
+    if(!tracksToExport.length){
+      exportProgress.textContent = 'No enabled tracks with notes and a clip to export.';
+      return;
+    }
+
+    stopPlayback();
+    exportCancelled = false;
+    exporting = true;
+    btnProperExport.disabled = true;
+    btnPerTrackExport.disabled = true;
+    btnCancelExport.disabled = false;
+    properDownloadLink.classList.add('hidden');
+    perTrackDownloadsEl.innerHTML = '';
+    exportProgress.classList.remove('err');
+    const exportStartedAt = performance.now();
+    function formatElapsed(){
+      const secs = Math.round((performance.now()-exportStartedAt)/1000);
+      const m = Math.floor(secs/60), s = secs%60;
+      return m+':'+String(s).padStart(2,'0');
+    }
+
+    const [width, height] = resolutionSelect.value.split('x').map(Number);
+    const fps = parseInt(exportFpsSelect.value, 10) || 30;
+
+    try{
+      setupAudioContext();
+      for(let ti=0; ti<tracksToExport.length; ti++){
+        if(exportCancelled) throw new Error('cancelled');
+        const tr = tracksToExport[ti];
+        exportProgress.textContent = 'Track '+(ti+1)+'/'+tracksToExport.length+' ("'+tr.label+'") — starting… (elapsed '+formatElapsed()+')';
+
+        const clip = state.trackClips[tr.index] || state.defaultClip;
+        const minStart = Math.min(...tr.notes.map(n=>n.time));
+        const soloNotes = tr.notes.map(n=>({ time:n.time-minStart, duration:n.duration, midi:n.midi, trackIndex:tr.index }));
+
+        const anticipateOn = anticipateToggle.checked;
+        const anticipateSeconds = Math.max(0, (parseFloat(anticipateMsInput.value)||0)/1000);
+        const scheduleList = soloNotes.map(n=>({ time:n.time, duration:n.duration, midi:n.midi, trackIndex:n.trackIndex, clip }));
+        const lastTimeByClip = new Map();
+        scheduleList.forEach(item=>{
+          const rate = Math.pow(2,(item.midi-clip.baseNote)/12);
+          const trimStart = clip.startOffset||0;
+          const trimEnd = (clip.endOffset==null) ? clip.buffer.duration : clip.endOffset;
+          const availableFromTrim = Math.max(0, trimEnd-trimStart);
+          const neededSourceTime = item.duration*rate;
+          const normalPlayLen = Math.max(0.01, Math.min(neededSourceTime, availableFromTrim));
+          let preRoll = 0;
+          if(!clip.continuousMode && anticipateOn && anticipateSeconds > 0){
+            const prevTime = lastTimeByClip.has(clip) ? lastTimeByClip.get(clip) : -Infinity;
+            const maxByGap = Math.max(0, (item.time-prevTime)-0.01);
+            const maxByBuffer = trimStart/rate;
+            preRoll = Math.max(0, Math.min(anticipateSeconds, maxByGap, maxByBuffer));
+          }
+          lastTimeByClip.set(clip, item.time);
+          item.rate = rate; item.preRoll = preRoll;
+          item.playOffset = Math.max(0, trimStart-preRoll*rate);
+          item.playLen = preRoll*rate + normalPlayLen;
+          item.volume = (tr.volume!=null?tr.volume:1);
         });
+
+        const totalDuration = computeDurationFor(soloNotes);
+        let videoEl = null, hasVideo = false;
+        if(clip.hasVideo && clip.videoURL){
+          videoEl = document.createElement('video');
+          videoEl.muted = true; videoEl.playsInline = true; videoEl.style.display = 'none';
+          videoEl.src = clip.videoURL;
+          document.body.appendChild(videoEl);
+          hasVideo = true;
+        }
+        const gridTrackDefs = [{ trackIndex: tr.index, label: tr.label, schedule: scheduleList, cursor:-1, activeItem:null, videoEl, hasVideo, continuousMode: !!clip.continuousMode, baseWeight: 1, phrases: [] }];
+
+        const blob = await renderOneClip({
+          scheduleList, gridTrackDefs, totalDuration, width, height, fps,
+          onStatus: (msg)=>{ exportProgress.textContent = 'Track '+(ti+1)+'/'+tracksToExport.length+' ("'+tr.label+'") — '+msg+' (elapsed '+formatElapsed()+')'; },
+          onProgress: (done,total)=>{ exportProgress.textContent = 'Track '+(ti+1)+'/'+tracksToExport.length+' ("'+tr.label+'") — frame '+done+'/'+total+' (elapsed '+formatElapsed()+')'; },
+          isCancelled: ()=> exportCancelled
+        });
+        cleanupGridTrackDefs(gridTrackDefs);
+
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        const safeName = tr.label.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase() || ('track-'+tr.index);
+        a.download = 'ytpmv-'+safeName+'.webm';
+        a.textContent = '⬇ '+tr.label+' (.webm)';
+        a.className = 'download-link';
+        a.style.display = 'block';
+        perTrackDownloadsEl.appendChild(a);
+      }
+      exportProgress.textContent = 'Done in '+formatElapsed()+' — '+tracksToExport.length+' track file(s) ready below.';
+    }catch(err){
+      if(err && err.message === 'cancelled'){
+        exportProgress.textContent = 'Per-track export cancelled.';
+      } else {
+        console.error(err);
+        exportProgress.textContent = 'Per-track export failed: '+(err && err.message ? err.message : 'unknown error');
+        exportProgress.classList.add('err');
       }
     } finally {
       exporting = false;
@@ -2673,6 +2908,7 @@
   }
 
   btnProperExport.addEventListener('click', ()=>{ runProperExport(); });
+  btnPerTrackExport.addEventListener('click', ()=>{ runPerTrackExport(); });
   btnCancelExport.addEventListener('click', ()=>{ exportCancelled = true; });
 
   btnSaveProject.addEventListener('click', ()=>{ downloadProjectFile(); });
