@@ -217,7 +217,7 @@
         <option value="1280x720">720p</option>
         <option value="1920x1080">1080p</option>
         <option value="3840x2160">4K</option>
-        <option value="7680x4320">8K — fine for Proper export below, likely to stutter for quick Record</option>
+        <option value="7680x4320">8K (experimental — high GPU memory, not supported on Safari)</option>
       </select>
     </label>
     <div class="controls">
@@ -231,23 +231,33 @@
     <div class="panel" style="margin-top:16px; background:#0e0c17;">
       <h2>Proper export (frame-accurate, not real-time)</h2>
       <div class="stat-line" style="margin-top:0;">
-        Steps through the song frame by frame instead of recording live, so it doesn't drop frames or stutter regardless of your computer's speed — it just takes longer to run. Uses your current resolution setting above. Needs Chrome, Edge, or Firefox 130+ (WebCodecs support).
+        Steps through the song frame by frame instead of recording live, so it doesn't drop frames or stutter regardless of your computer's speed — it just takes longer to run. Uses your current resolution setting above. Works in Chrome, Edge, Firefox 130+, and Safari 16.4+ (WebCodecs support).
       </div>
-      <label class="field" style="margin-top:10px; display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
-        Frame rate:
-        <select id="exportFpsSelect" style="width:auto;">
-          <option value="24">24 fps</option>
-          <option value="30" selected>30 fps</option>
-          <option value="60">60 fps</option>
-        </select>
-      </label>
+      <div style="display:flex; flex-wrap:wrap; gap:16px; margin-top:10px;">
+        <label class="field" style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+          Format:
+          <select id="exportFormatSelect" style="width:auto;">
+            <option value="auto" selected>Auto (recommended — MP4 on Safari/Mac, WebM on Chrome/Firefox)</option>
+            <option value="mp4">MP4 (H.264 + AAC — universal, Safari, QuickTime)</option>
+            <option value="webm">WebM (VP9 + Opus — Chrome, Firefox)</option>
+          </select>
+        </label>
+        <label class="field" style="display:flex; align-items:center; gap:8px; text-transform:none; letter-spacing:normal;">
+          Frame rate:
+          <select id="exportFpsSelect" style="width:auto;">
+            <option value="24">24 fps</option>
+            <option value="30" selected>30 fps</option>
+            <option value="60">60 fps</option>
+          </select>
+        </label>
+      </div>
       <div class="controls">
         <button class="action btn-preview" id="btnProperExport" disabled>⚙ Export properly</button>
         <button class="action btn-preview" id="btnPerTrackExport" disabled>📦 Export each track individually</button>
         <button class="action btn-stop" id="btnCancelExport" disabled>■ Cancel export</button>
       </div>
       <div class="stat-line" id="exportProgress"></div>
-      <a href="#" class="download-link hidden" id="properDownloadLink" download="ytpmv-proper.webm">Download your properly-exported YTPMV (.webm)</a>
+      <a href="#" class="download-link hidden" id="properDownloadLink" download="ytpmv-proper.mp4">Download your properly-exported YTPMV</a>
       <div id="perTrackDownloads"></div>
     </div>
 
@@ -269,7 +279,14 @@
 
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
+<script src="public/vendor/soundfont-player.min.js"></script>
+<script>
+  if(!window.Soundfont){
+    document.write('<script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"><\/script>');
+  }
+</script>
+<script src="public/vendor/webm-muxer.min.js"></script>
+<script src="public/vendor/mp4-muxer.min.js"></script>
 <script>
 (function(){
   const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -367,6 +384,7 @@
   const btnPerTrackExport = document.getElementById('btnPerTrackExport');
   const perTrackDownloadsEl = document.getElementById('perTrackDownloads');
   const btnCancelExport = document.getElementById('btnCancelExport');
+  const exportFormatSelect = document.getElementById('exportFormatSelect');
   const exportFpsSelect = document.getElementById('exportFpsSelect');
   const exportProgress = document.getElementById('exportProgress');
   const btnSaveProject = document.getElementById('btnSaveProject');
@@ -1539,7 +1557,9 @@
     btnPreview.disabled = !ready || playing;
     btnRecord.disabled = !ready || playing;
     btnStop.disabled = !playing;
-    resolutionSelect.disabled = playing;
+    resolutionSelect.disabled = playing || exporting;
+    if(exportFormatSelect) exportFormatSelect.disabled = playing || exporting;
+    if(exportFpsSelect) exportFpsSelect.disabled = playing || exporting;
     if(!exporting) btnProperExport.disabled = !ready || playing;
     if(!exporting) btnPerTrackExport.disabled = !ready || playing;
   }
@@ -2531,7 +2551,7 @@
     return await offlineCtx.startRendering();
   }
 
-  async function encodeAudioOffline(audioBuffer, audioEncoder){
+  async function encodeAudioOffline(audioBuffer, audioEncoder, isCancelled){
     const sampleRate = audioBuffer.sampleRate;
     const channels = audioBuffer.numberOfChannels;
     const chunkSamples = 4096;
@@ -2540,6 +2560,10 @@
     for(let c=0;c<channels;c++) channelData.push(audioBuffer.getChannelData(c));
 
     for(let offset=0; offset<totalSamples; offset+=chunkSamples){
+      if(isCancelled && isCancelled()) throw new Error('cancelled');
+      while(audioEncoder.encodeQueueSize > 8){
+        await new Promise(r=>setTimeout(r, 10));
+      }
       const len = Math.min(chunkSamples, totalSamples-offset);
       const planar = new Float32Array(len*channels);
       for(let c=0;c<channels;c++){ planar.set(channelData[c].subarray(offset, offset+len), c*len); }
@@ -2588,126 +2612,355 @@
       }
     });
 
-    for(let f=0; f<frameCount; f++){
-      if(isCancelled()) throw new Error('cancelled');
-      const elapsed = f/fps;
+    try{
+      for(let f=0; f<frameCount; f++){
+        if(isCancelled()) throw new Error('cancelled');
+        const elapsed = f/fps;
 
-      for(const gt of gridTrackDefs){
-        let idx = -1;
-        for(let i=0;i<gt.schedule.length;i++){ if(gt.schedule[i].time-gt.schedule[i].preRoll <= elapsed) idx=i; else break; }
-        if(idx>=0){
-          gt.cursor = idx;
-          gt.activeItem = gt.schedule[idx];
-          gt.noteEndTime = gt.continuousMode ? null : (gt.activeItem.time-gt.activeItem.preRoll)+(gt.activeItem.playLen/gt.activeItem.rate);
-          if(gt.hasVideo){
-            const item = gt.activeItem;
-            if(gt.continuousMode){
-              const clip = item.clip;
-              const trimStart = clip.startOffset||0;
-              const trimEnd = Math.max(trimStart+0.05, (clip.endOffset==null)?clip.buffer.duration:clip.endOffset);
-              const regionLen = trimEnd-trimStart;
-              const bufferTimeConsumed = gt.cumBufferTime[idx] + Math.max(0, elapsed-item.time)*item.rate;
-              let localT = trimStart + (bufferTimeConsumed % regionLen);
-              if(localT < trimStart) localT += regionLen;
-              await seekAndWait(gt.videoEl, localT);
-            } else {
-              const heldElapsed = Math.min(Math.max(0, elapsed-(item.time-item.preRoll)), item.playLen/item.rate);
-              const localT = item.playOffset + heldElapsed*item.rate;
-              await seekAndWait(gt.videoEl, localT);
+        for(const gt of gridTrackDefs){
+          let idx = -1;
+          for(let i=0;i<gt.schedule.length;i++){ if(gt.schedule[i].time-gt.schedule[i].preRoll <= elapsed) idx=i; else break; }
+          if(idx>=0){
+            gt.cursor = idx;
+            gt.activeItem = gt.schedule[idx];
+            gt.noteEndTime = gt.continuousMode ? null : (gt.activeItem.time-gt.activeItem.preRoll)+(gt.activeItem.playLen/gt.activeItem.rate);
+            if(gt.hasVideo){
+              const item = gt.activeItem;
+              if(gt.continuousMode){
+                const clip = item.clip;
+                const trimStart = clip.startOffset||0;
+                const trimEnd = Math.max(trimStart+0.05, (clip.endOffset==null)?clip.buffer.duration:clip.endOffset);
+                const regionLen = trimEnd-trimStart;
+                const bufferTimeConsumed = gt.cumBufferTime[idx] + Math.max(0, elapsed-item.time)*item.rate;
+                let localT = trimStart + (bufferTimeConsumed % regionLen);
+                if(localT < trimStart) localT += regionLen;
+                await seekAndWait(gt.videoEl, localT);
+              } else {
+                const heldElapsed = Math.min(Math.max(0, elapsed-(item.time-item.preRoll)), item.playLen/item.rate);
+                const localT = item.playOffset + heldElapsed*item.rate;
+                await seekAndWait(gt.videoEl, localT);
+              }
             }
           }
         }
-      }
 
-      octx.fillStyle = '#000'; octx.fillRect(0,0,width,height);
-      const rects = computeTileRects(gridTrackDefs, width, height, elapsed);
-      gridTrackDefs.forEach((gt,i)=>{
-        const { x, y, w:cellW, h:cellH } = rects[i];
-        octx.save(); octx.beginPath(); octx.rect(x,y,cellW,cellH); octx.clip();
-        octx.fillStyle = '#0b0b12'; octx.fillRect(x,y,cellW,cellH);
-        if(gt.activeItem && gt.hasVideo && gt.videoEl.readyState >= 2){
-          octx.drawImage(gt.videoEl, x, y, cellW, cellH);
-        } else if(gt.activeItem){
-          const item = gt.activeItem;
-          const hue = ((item.midi - item.clip.baseNote)*9 + gt.trackIndex*47 + 280) % 360;
-          octx.fillStyle = 'hsl('+hue+',85%,55%)';
-          const bars = 6;
-          for(let b=0;b<bars;b++){
-            const bh = (Math.sin(elapsed*9 + b*1.3 + gt.trackIndex)*0.5+0.5) * cellH*0.5 + cellH*0.15;
-            octx.fillRect(x+b*(cellW/bars)+3, y+cellH-bh, (cellW/bars)-6, bh);
+        octx.fillStyle = '#000'; octx.fillRect(0,0,width,height);
+        const rects = computeTileRects(gridTrackDefs, width, height, elapsed);
+        gridTrackDefs.forEach((gt,i)=>{
+          const { x, y, w:cellW, h:cellH } = rects[i];
+          octx.save(); octx.beginPath(); octx.rect(x,y,cellW,cellH); octx.clip();
+          octx.fillStyle = '#0b0b12'; octx.fillRect(x,y,cellW,cellH);
+          if(gt.activeItem && gt.hasVideo && gt.videoEl.readyState >= 2){
+            octx.drawImage(gt.videoEl, x, y, cellW, cellH);
+          } else if(gt.activeItem){
+            const item = gt.activeItem;
+            const hue = ((item.midi - item.clip.baseNote)*9 + gt.trackIndex*47 + 280) % 360;
+            octx.fillStyle = 'hsl('+hue+',85%,55%)';
+            const bars = 6;
+            for(let b=0;b<bars;b++){
+              const bh = (Math.sin(elapsed*9 + b*1.3 + gt.trackIndex)*0.5+0.5) * cellH*0.5 + cellH*0.15;
+              octx.fillRect(x+b*(cellW/bars)+3, y+cellH-bh, (cellW/bars)-6, bh);
+            }
           }
+          octx.restore();
+          if(showLabelsToggle.checked){
+            octx.fillStyle = 'rgba(255,255,255,0.75)';
+            octx.font = '700 '+Math.max(10,Math.min(14,cellH*0.09)).toFixed(0)+'px monospace';
+            octx.fillText(gt.label.slice(0,20), x+6, y+16);
+          }
+          octx.strokeStyle = 'rgba(255,255,255,0.1)';
+          octx.strokeRect(x,y,cellW,cellH);
+        });
+        if(scanlineToggle.checked){
+          octx.fillStyle = 'rgba(0,0,0,0.16)';
+          for(let yy=0; yy<height; yy+=4){ octx.fillRect(0,yy,width,1); }
         }
-        octx.restore();
-        if(showLabelsToggle.checked){
-          octx.fillStyle = 'rgba(255,255,255,0.75)';
-          octx.font = '700 '+Math.max(10,Math.min(14,cellH*0.09)).toFixed(0)+'px monospace';
-          octx.fillText(gt.label.slice(0,20), x+6, y+16);
+
+        // Apply backpressure: wait for hardware encoder to process frames before queuing more
+        while(videoEncoder.encodeQueueSize > 2){
+          if(isCancelled()) throw new Error('cancelled');
+          await new Promise(resolve=>{
+            let resolved = false;
+            const onDequeue = ()=>{
+              if(!resolved){
+                resolved = true;
+                videoEncoder.removeEventListener('dequeue', onDequeue);
+                resolve();
+              }
+            };
+            videoEncoder.addEventListener('dequeue', onDequeue, { once: true });
+            setTimeout(onDequeue, 20);
+          });
         }
-        octx.strokeStyle = 'rgba(255,255,255,0.1)';
-        octx.strokeRect(x,y,cellW,cellH);
+
+        const frameTimestamp = Math.round((f/fps)*1e6);
+        const frameDuration = Math.round((1/fps)*1e6);
+        const frame = new VideoFrame(offCanvas, { timestamp: frameTimestamp, duration: frameDuration });
+        try{
+          videoEncoder.encode(frame, { keyFrame: f % (fps*2) === 0 });
+        } finally {
+          frame.close();
+        }
+
+        onProgress(f+1, frameCount);
+        if(f % 5 === 0) await new Promise(r=>setTimeout(r,0));
+      }
+      await videoEncoder.flush();
+    } finally {
+      // Clean up canvas and video elements to immediately free GPU memory in Safari
+      offCanvas.width = 1;
+      offCanvas.height = 1;
+      gridTrackDefs.forEach(gt=>{
+        if(gt.videoEl){
+          try{ gt.videoEl.pause(); }catch(e){}
+          if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl);
+        }
       });
-      if(scanlineToggle.checked){
-        octx.fillStyle = 'rgba(0,0,0,0.16)';
-        for(let yy=0; yy<height; yy+=4){ octx.fillRect(0,yy,width,1); }
-      }
-
-      const frame = new VideoFrame(offCanvas, { timestamp: Math.round((f/fps)*1e6) });
-      try{ videoEncoder.encode(frame, { keyFrame: f % (fps*2) === 0 }); } finally { frame.close(); }
-
-      onProgress(f+1, frameCount);
-      if(f % 5 === 0) await new Promise(r=>setTimeout(r,0));
     }
-    await videoEncoder.flush();
+  }
 
-    gridTrackDefs.forEach(gt=>{
-      if(gt.videoEl){
-        try{ gt.videoEl.pause(); }catch(e){}
-        if(gt.videoEl.parentNode) gt.videoEl.parentNode.removeChild(gt.videoEl);
+  function checkCanvasSupport(width, height){
+    // Safari / WebKit limits 2D canvas dimension to 4096 and area to 16.7M pixels
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+    if(isSafari && (width > 4096 || height > 4096 || (width * height) > 16777216)){
+      return {
+        supported: false,
+        reason: 'Safari restricts canvas size to 4096px (maximum 16.7M pixels). 8K ('+width+'x'+height+') cannot be allocated by Safari and can crash macOS. Please select 4K (3840x2160) or 1080p.'
+      };
+    }
+    try{
+      const test = document.createElement('canvas');
+      test.width = width;
+      test.height = height;
+      const ctx = test.getContext('2d', { willReadFrequently: true });
+      if(!ctx){
+        return { supported: false, reason: 'Failed to create a '+width+'x'+height+' canvas context.' };
       }
-    });
+      ctx.fillRect(0, 0, 1, 1);
+      const imgData = ctx.getImageData(0, 0, 1, 1);
+      test.width = 1;
+      test.height = 1;
+      if(!imgData || !imgData.data){
+        return { supported: false, reason: 'Failed to allocate image buffer for '+width+'x'+height+'.' };
+      }
+    }catch(err){
+      return {
+        supported: false,
+        reason: 'Resolution '+width+'x'+height+' exceeds available canvas memory in this browser: ' + (err && err.message ? err.message : err)
+      };
+    }
+    return { supported: true };
+  }
+
+  async function resolveExportPipeline({ formatPreference, width, height, fps, sampleRate, numberOfChannels }){
+    const bitrate = Math.min(60_000_000, Math.max(5_000_000, Math.round(width * height * fps * (width >= 3840 ? 0.05 : 0.03))));
+    const audioBitrate = 160000;
+    const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+
+    const avcCandidates = [
+      'avc1.640033', // High Profile Level 5.1 (4K)
+      'avc1.4d0033', // Main Profile Level 5.1
+      'avc1.640034', // High Profile Level 5.2
+      'avc1.64002a', // High Profile Level 4.2 (1080p)
+      'avc1.4d002a', // Main Profile Level 4.2
+      'avc1.42001f'  // Baseline Profile Level 3.1
+    ];
+
+    const vpCandidates = [
+      'vp09.00.10.08',
+      'vp09.00.40.08',
+      'vp09.00.50.08',
+      'vp8'
+    ];
+
+    async function testMp4(){
+      const mp4Obj = window.Mp4Muxer || (typeof Mp4Muxer !== 'undefined' ? Mp4Muxer : null);
+      if(!mp4Obj) return null;
+
+      let matchedVideo = null;
+      for(const codec of avcCandidates){
+        try{
+          const support = await VideoEncoder.isConfigSupported({
+            codec, width, height, framerate: fps, bitrate
+          });
+          if(support && support.supported){
+            matchedVideo = { codec, config: support.config || { codec, width, height, framerate: fps, bitrate } };
+            break;
+          }
+        }catch(e){}
+      }
+      if(!matchedVideo) return null;
+
+      let matchedAudio = null;
+      for(const codec of ['mp4a.40.2', 'aac']){
+        try{
+          const support = await AudioEncoder.isConfigSupported({
+            codec, sampleRate, numberOfChannels, bitrate: audioBitrate
+          });
+          if(support && support.supported){
+            matchedAudio = { codec, config: support.config || { codec, sampleRate, numberOfChannels, bitrate: audioBitrate } };
+            break;
+          }
+        }catch(e){}
+      }
+      if(!matchedAudio) return null;
+
+      return {
+        format: 'mp4',
+        mimeType: 'video/mp4',
+        extension: 'mp4',
+        video: matchedVideo,
+        audio: matchedAudio,
+        MuxerClass: mp4Obj.Muxer,
+        TargetClass: mp4Obj.ArrayBufferTarget
+      };
+    }
+
+    async function testWebM(){
+      const webmObj = window.WebMMuxer || (typeof WebMMuxer !== 'undefined' ? WebMMuxer : null);
+      if(!webmObj) return null;
+
+      let matchedVideo = null;
+      for(const codec of vpCandidates){
+        try{
+          const support = await VideoEncoder.isConfigSupported({
+            codec, width, height, framerate: fps, bitrate
+          });
+          if(support && support.supported){
+            matchedVideo = { codec, config: support.config || { codec, width, height, framerate: fps, bitrate } };
+            break;
+          }
+        }catch(e){}
+      }
+      if(!matchedVideo) return null;
+
+      let matchedAudio = null;
+      for(const codec of ['opus']){
+        try{
+          const support = await AudioEncoder.isConfigSupported({
+            codec, sampleRate, numberOfChannels, bitrate: audioBitrate
+          });
+          if(support && support.supported){
+            matchedAudio = { codec, config: support.config || { codec, sampleRate, numberOfChannels, bitrate: audioBitrate } };
+            break;
+          }
+        }catch(e){}
+      }
+      if(!matchedAudio) return null;
+
+      return {
+        format: 'webm',
+        mimeType: 'video/webm',
+        extension: 'webm',
+        video: matchedVideo,
+        audio: matchedAudio,
+        MuxerClass: webmObj.Muxer,
+        TargetClass: webmObj.ArrayBufferTarget
+      };
+    }
+
+    let pipeline = null;
+    let notice = '';
+
+    if(formatPreference === 'mp4'){
+      pipeline = await testMp4();
+      if(!pipeline){
+        pipeline = await testWebM();
+        if(pipeline) notice = 'MP4 encoder unsupported in this browser; using WebM fallback.';
+      }
+    } else if(formatPreference === 'webm'){
+      pipeline = await testWebM();
+      if(!pipeline){
+        pipeline = await testMp4();
+        if(pipeline) notice = 'WebM encoder unsupported in this browser (common on Safari); using MP4 fallback.';
+      }
+    } else {
+      // Auto selection: On Safari / Apple WebKit prioritize MP4; otherwise try WebM then MP4
+      if(isSafari){
+        pipeline = await testMp4() || await testWebM();
+      } else {
+        pipeline = await testWebM() || await testMp4();
+      }
+    }
+
+    if(!pipeline){
+      throw new Error('Your browser or this resolution does not support hardware/software video encoding. Try 1080p, or use "Record & download" above.');
+    }
+    pipeline.notice = notice;
+    return pipeline;
   }
 
   // The actual render+encode+mux pipeline, shared by the full combined export and
-  // the per-track export — takes a schedule/grid and returns a finished .webm Blob.
-  async function renderOneClip({ scheduleList, gridTrackDefs, totalDuration, width, height, fps, onProgress, isCancelled, onStatus }){
-    const muxerModule = await import('https://cdn.jsdelivr.net/npm/webm-muxer@latest/build/webm-muxer.mjs');
-    const { Muxer, ArrayBufferTarget } = muxerModule;
+  // the per-track export — negotiates MP4 or WebM and returns a finished Blob with metadata.
+  async function renderOneClip({ scheduleList, gridTrackDefs, totalDuration, width, height, fps, formatPreference, onProgress, isCancelled, onStatus }){
+    if(onStatus) onStatus('Initialising export codecs…');
+    const pipeline = await resolveExportPipeline({
+      formatPreference: formatPreference || 'auto',
+      width,
+      height,
+      fps,
+      sampleRate: 48000,
+      numberOfChannels: 2
+    });
 
     if(onStatus) onStatus('Rendering audio (offline, sample-accurate)…');
     const audioBuffer = await renderAudioOffline(scheduleList, totalDuration, 48000);
+    if(isCancelled && isCancelled()) throw new Error('cancelled');
 
-    const muxer = new Muxer({
-      target: new ArrayBufferTarget(),
-      video: { codec:'V_VP9', width, height, frameRate: fps },
-      audio: { codec:'A_OPUS', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: 48000 }
-    });
+    let muxer = null;
+    if(pipeline.format === 'mp4'){
+      muxer = new pipeline.MuxerClass({
+        target: new pipeline.TargetClass(),
+        video: { codec: 'avc', width, height },
+        audio: { codec: 'aac', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: 48000 },
+        fastStart: 'in-memory',
+        firstTimestampBehavior: 'offset'
+      });
+    } else {
+      muxer = new pipeline.MuxerClass({
+        target: new pipeline.TargetClass(),
+        video: {
+          codec: pipeline.video.codec.startsWith('vp8') ? 'V_VP8' : 'V_VP9',
+          width,
+          height,
+          frameRate: fps
+        },
+        audio: { codec: 'A_OPUS', numberOfChannels: audioBuffer.numberOfChannels, sampleRate: 48000 },
+        firstTimestampBehavior: 'offset'
+      });
+    }
 
     const videoEncoder = new VideoEncoder({
       output: (chunk, meta)=> muxer.addVideoChunk(chunk, meta),
       error: e=> console.error('video encoder error', e)
     });
-    videoEncoder.configure({
-      codec: 'vp09.00.10.08',
-      width, height,
-      framerate: fps,
-      bitrate: Math.min(60_000_000, Math.max(4_000_000, Math.round(width*height*fps*0.02)))
-    });
+    videoEncoder.configure(pipeline.video.config);
 
     const audioEncoder = new AudioEncoder({
       output: (chunk, meta)=> muxer.addAudioChunk(chunk, meta),
       error: e=> console.error('audio encoder error', e)
     });
-    audioEncoder.configure({ codec:'opus', sampleRate:48000, numberOfChannels: audioBuffer.numberOfChannels, bitrate:160000 });
+    audioEncoder.configure(pipeline.audio.config);
 
-    if(onStatus) onStatus('Encoding audio…');
-    await encodeAudioOffline(audioBuffer, audioEncoder);
+    try{
+      if(onStatus) onStatus('Encoding audio…');
+      await encodeAudioOffline(audioBuffer, audioEncoder, isCancelled);
 
-    if(onStatus) onStatus('Rendering video frame 0…');
-    await renderVideoFramesOffline({ gridTrackDefs, totalDuration, fps, width, height, videoEncoder, onProgress, isCancelled });
+      if(onStatus) onStatus('Rendering video frame 0…');
+      await renderVideoFramesOffline({ gridTrackDefs, totalDuration, fps, width, height, videoEncoder, onProgress, isCancelled });
 
-    muxer.finalize();
-    const { buffer } = muxer.target;
-    return new Blob([buffer], { type:'video/webm' });
+      muxer.finalize();
+      const { buffer } = muxer.target;
+      const blob = new Blob([buffer], { type: pipeline.mimeType });
+      return { blob, extension: pipeline.extension, format: pipeline.format, mimeType: pipeline.mimeType, notice: pipeline.notice };
+    } finally {
+      if(videoEncoder && videoEncoder.state !== 'closed'){
+        try{ videoEncoder.close(); }catch(e){}
+      }
+      if(audioEncoder && audioEncoder.state !== 'closed'){
+        try{ audioEncoder.close(); }catch(e){}
+      }
+    }
   }
 
   function cleanupGridTrackDefs(gridTrackDefs){
@@ -2719,7 +2972,7 @@
 
   async function runProperExport(){
     if(!('VideoEncoder' in window) || !('AudioEncoder' in window)){
-      exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, or Firefox 130+ — otherwise use 'Record & download' above instead.";
+      exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, Firefox 130+, or Safari 16.4+ — otherwise use 'Record & download' above instead.";
       exportProgress.classList.add('err');
       return;
     }
@@ -2749,6 +3002,13 @@
     try{
       const [width, height] = resolutionSelect.value.split('x').map(Number);
       const fps = parseInt(exportFpsSelect.value, 10) || 30;
+      const formatPreference = exportFormatSelect ? exportFormatSelect.value : 'auto';
+
+      // 1. Guard against canvas memory limits (especially on Safari)
+      const canvasCheck = checkCanvasSupport(width, height);
+      if(!canvasCheck.supported){
+        throw new Error(canvasCheck.reason);
+      }
 
       setupAudioContext();
       const { scheduleList, totalDuration, gridTrackDefs } = buildExportSchedule();
@@ -2758,16 +3018,18 @@
         return;
       }
 
-      const blob = await renderOneClip({
-        scheduleList, gridTrackDefs, totalDuration, width, height, fps,
+      const res = await renderOneClip({
+        scheduleList, gridTrackDefs, totalDuration, width, height, fps, formatPreference,
         onStatus: (msg)=>{ exportProgress.textContent = msg+' (elapsed '+formatElapsed()+')'; },
         onProgress: (done,total)=>{ exportProgress.textContent = 'Rendering frame '+done+' / '+total+' — elapsed '+formatElapsed()+'…'; },
         isCancelled: ()=> exportCancelled
       });
 
-      properDownloadLink.href = URL.createObjectURL(blob);
+      properDownloadLink.href = URL.createObjectURL(res.blob);
+      properDownloadLink.download = 'ytpmv-proper.' + res.extension;
+      properDownloadLink.textContent = 'Download your properly-exported YTPMV (.' + res.extension + ')';
       properDownloadLink.classList.remove('hidden');
-      exportProgress.textContent = 'Done in '+formatElapsed()+' — proper export ready below.';
+      exportProgress.textContent = 'Done in '+formatElapsed()+' — proper export ready below (' + res.extension.toUpperCase() + (res.notice ? ' — ' + res.notice : '') + ').';
     }catch(err){
       if(err && err.message === 'cancelled'){
         exportProgress.textContent = 'Export cancelled.';
@@ -2786,11 +3048,11 @@
 
   // Same pipeline, run once per enabled track — each track's own notes, re-based to
   // start at time 0 (so you're not exporting a long silent lead-in), using whatever
-  // clip that track actually resolves to. Produces one .webm per track, sequentially
+  // clip that track actually resolves to. Produces one file per track, sequentially
   // (not in parallel, to keep memory/encoder load sane).
   async function runPerTrackExport(){
     if(!('VideoEncoder' in window) || !('AudioEncoder' in window)){
-      exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, or Firefox 130+.";
+      exportProgress.textContent = "This browser doesn't support WebCodecs, which this needs. Try Chrome, Edge, Firefox 130+, or Safari 16.4+.";
       exportProgress.classList.add('err');
       return;
     }
@@ -2826,6 +3088,18 @@
 
     const [width, height] = resolutionSelect.value.split('x').map(Number);
     const fps = parseInt(exportFpsSelect.value, 10) || 30;
+    const formatPreference = exportFormatSelect ? exportFormatSelect.value : 'auto';
+
+    // Guard against canvas memory limits
+    const canvasCheck = checkCanvasSupport(width, height);
+    if(!canvasCheck.supported){
+      exportProgress.textContent = canvasCheck.reason;
+      exportProgress.classList.add('err');
+      exporting = false;
+      btnCancelExport.disabled = true;
+      refreshButtons();
+      return;
+    }
 
     try{
       setupAudioContext();
@@ -2874,8 +3148,8 @@
         }
         const gridTrackDefs = [{ trackIndex: tr.index, label: tr.label, schedule: scheduleList, cursor:-1, activeItem:null, videoEl, hasVideo, continuousMode: !!clip.continuousMode, baseWeight: 1, phrases: [] }];
 
-        const blob = await renderOneClip({
-          scheduleList, gridTrackDefs, totalDuration, width, height, fps,
+        const res = await renderOneClip({
+          scheduleList, gridTrackDefs, totalDuration, width, height, fps, formatPreference,
           onStatus: (msg)=>{ exportProgress.textContent = 'Track '+(ti+1)+'/'+tracksToExport.length+' ("'+tr.label+'") — '+msg+' (elapsed '+formatElapsed()+')'; },
           onProgress: (done,total)=>{ exportProgress.textContent = 'Track '+(ti+1)+'/'+tracksToExport.length+' ("'+tr.label+'") — frame '+done+'/'+total+' (elapsed '+formatElapsed()+')'; },
           isCancelled: ()=> exportCancelled
@@ -2883,10 +3157,10 @@
         cleanupGridTrackDefs(gridTrackDefs);
 
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
+        a.href = URL.createObjectURL(res.blob);
         const safeName = tr.label.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').toLowerCase() || ('track-'+tr.index);
-        a.download = 'ytpmv-'+safeName+'.webm';
-        a.textContent = '⬇ '+tr.label+' (.webm)';
+        a.download = 'ytpmv-'+safeName+'.' + res.extension;
+        a.textContent = '⬇ '+tr.label+' (.'+res.extension+')';
         a.className = 'download-link';
         a.style.display = 'block';
         perTrackDownloadsEl.appendChild(a);
